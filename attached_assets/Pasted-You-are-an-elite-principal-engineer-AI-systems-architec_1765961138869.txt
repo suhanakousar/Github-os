@@ -1,0 +1,333 @@
+You are an elite principal engineer, AI systems architect, DevOps lead, and GitHub ecosystem specialist.
+
+You are building GitMind OS, a deep, autonomous, AI-driven GitHub Intelligence & Governance Platform that observes, reasons, predicts, enforces, and evolves software projects hosted on GitHub.
+
+This is NOT a simple tool.
+This is a complex system with multiple intelligence layers.
+
+PRODUCT PHILOSOPHY (IMPORTANT)
+
+GitMind OS should behave like:
+
+A Senior Tech Lead
+
+A Project Manager
+
+A Code Quality Auditor
+
+A DevOps Guardian
+
+An AI Co-Engineer
+
+It should:
+
+Think in systems
+
+Detect patterns over time
+
+Predict future problems
+
+Enforce standards automatically
+
+Explain why decisions are made
+
+🔥 FULL FEATURE SET (ADVANCED & NON-NEGOTIABLE)
+🧩 1️⃣ Repository Knowledge Graph Engine
+
+Build a knowledge graph of the repository:
+
+Nodes:
+
+Files
+
+Functions
+
+Commits
+
+PRs
+
+Contributors
+
+Issues
+
+Edges:
+
+File modified by commit
+
+Commit belongs to PR
+
+Contributor owns code area
+
+Issue linked to PR
+
+Store internally as structured JSON.
+
+Purpose:
+
+Power advanced reasoning
+
+Enable dependency impact analysis
+
+🧠 2️⃣ Temporal Intelligence Engine (Time-Aware Analysis)
+
+Analyze how the repo evolves over time:
+
+Velocity trends
+
+Code churn
+
+Contributor burnout signals
+
+PR review delays
+
+Generate insights like:
+
+“Repo velocity dropped 38% in last 2 weeks”
+
+“Core modules modified repeatedly without stabilization”
+
+⚠️ 3️⃣ Multi-Dimensional Risk Engine (Advanced)
+
+Calculate multiple risk dimensions:
+
+Code Risk
+
+Process Risk
+
+Human Risk
+
+Architectural Risk
+
+Release Risk
+
+Each PR gets:
+
+{
+  "overall_risk": 82,
+  "risk_breakdown": {
+    "code": 90,
+    "process": 75,
+    "human": 65
+  }
+}
+
+
+Explain why each score exists.
+
+🧬 4️⃣ Architectural Drift Detection
+
+Detect when:
+
+Folder structure degrades
+
+Responsibility boundaries blur
+
+God-files emerge
+
+Circular dependencies grow
+
+Auto-suggest:
+
+Folder splits
+
+Module isolation
+
+Layer boundaries
+
+🤖 5️⃣ Copilot-Driven Autonomous Refactor Planner
+
+Instead of just suggesting refactors:
+
+Generate a step-by-step refactor plan
+
+Include:
+
+File order
+
+Test strategy
+
+Risk mitigation
+
+Output:
+
+### Suggested Refactor Plan
+1. Extract auth logic into /core/auth
+2. Add unit tests before moving files
+3. Update imports gradually
+
+📊 6️⃣ Contributor Intelligence & Reputation Engine
+
+For each contributor:
+
+Contribution quality score
+
+Review reliability
+
+Risk profile
+
+Detect:
+
+Single-point-of-failure contributors
+
+New contributor risk zones
+
+🧠 7️⃣ AI Sprint Intelligence (Project-Level)
+
+Analyze open issues + PRs to:
+
+Predict sprint failure
+
+Identify blockers
+
+Suggest priority reorder
+
+Output:
+
+“Sprint risk: HIGH – 2 core PRs unreviewed, 1 blocker issue idle for 6 days.”
+
+🧾 8️⃣ Automated Governance Engine (Policy-as-Code)
+
+Define rules like:
+
+Max PR size
+
+Required test coverage
+
+Mandatory reviewers
+
+Commit message quality
+
+Rules live as config files, not hardcoded.
+
+⚙️ 9️⃣ GitHub Actions as Enforcement Layer (VERY IMPORTANT)
+
+Create multiple workflows:
+
+repo-intelligence.yml
+
+pr-risk-analysis.yml
+
+governance-enforcement.yml
+
+Capabilities:
+
+Block PRs
+
+Post detailed comments
+
+Label PRs automatically
+
+Escalate risks
+
+🔮 🔟 Predictive Failure Engine
+
+Based on historical patterns:
+
+Predict likely bugs
+
+Predict PR reverts
+
+Predict missed deadlines
+
+Even heuristic-based prediction is fine — document logic clearly.
+
+🧑‍💻 1️⃣1️⃣ Developer Simulation Mode (WOW FEATURE)
+
+Simulate:
+
+“What if this PR merges today?”
+
+“What if this contributor leaves?”
+
+Show projected risk impact.
+
+Judges will LOVE this.
+
+📟 1️⃣2️⃣ Multi-Interface System
+
+Provide at least TWO interfaces:
+
+CLI dashboard (mandatory)
+
+JSON API output
+
+(Optional) minimal web UI
+
+CLI should feel professional:
+
+GitMind OS v1.0
+Repo Health: 71/100
+High Risk PRs: 2
+Architecture Warnings: 3
+
+🗂️ REQUIRED ENTERPRISE-GRADE STRUCTURE
+gitmind-os/
+│
+├── intelligence/
+│   ├── knowledge_graph.py
+│   ├── temporal_analysis.py
+│   ├── prediction_engine.py
+│
+├── analysis/
+│   ├── risk_engine.py
+│   ├── architecture_drift.py
+│   ├── contributor_intel.py
+│
+├── governance/
+│   ├── policy_engine.py
+│   ├── rules.yaml
+│
+├── automation/
+│   └── github_actions/
+│       ├── pr-risk.yml
+│       ├── governance.yml
+│
+├── interfaces/
+│   ├── cli.py
+│   ├── api.py
+│
+├── docs/
+│   ├── architecture.md
+│   ├── copilot-usage.md
+│   ├── design-decisions.md
+│
+├── README.md
+└── requirements.txt / package.json
+
+🤖 COPILOT USAGE (JUDGE-CRITICAL)
+
+Document:
+
+Exact prompts used
+
+Where Copilot generated logic
+
+Where Copilot refactored code
+
+How Copilot accelerated development
+
+Make this explicit and auditable.
+
+🏆 FINAL OUTPUT EXPECTATION
+
+The result must feel like:
+
+A GitHub-native AI platform
+
+A real startup internal tool
+
+A senior engineer’s system design
+
+No placeholders.
+No TODOs.
+No fake features.
+
+🎯 FINAL INSTRUCTION
+
+Build GitMind OS as if:
+
+GitHub engineers will review it
+
+Judges have only 5 minutes
+
+You want them to remember your project
