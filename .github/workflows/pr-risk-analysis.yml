@@ -1,0 +1,128 @@
+name: PR Risk Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  analyze-pr-risk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Analyze PR Risk
+        id: risk-analysis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "Analyzing PR #${{ github.event.pull_request.number }}"
+          echo "PR Title: ${{ github.event.pull_request.title }}"
+          echo "Author: ${{ github.event.pull_request.user.login }}"
+          
+          # Calculate risk factors
+          FILES_CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | wc -l)
+          ADDITIONS=$(git diff --shortstat ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | awk '{print $4}')
+          DELETIONS=$(git diff --shortstat ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | awk '{print $6}')
+          
+          echo "Files changed: $FILES_CHANGED"
+          echo "Additions: $ADDITIONS"
+          echo "Deletions: $DELETIONS"
+          
+          # Risk scoring (simplified)
+          RISK_SCORE=0
+          if [ "$FILES_CHANGED" -gt 20 ]; then
+            RISK_SCORE=$((RISK_SCORE + 30))
+          elif [ "$FILES_CHANGED" -gt 10 ]; then
+            RISK_SCORE=$((RISK_SCORE + 15))
+          fi
+          
+          if [ "$ADDITIONS" -gt 1000 ]; then
+            RISK_SCORE=$((RISK_SCORE + 25))
+          elif [ "$ADDITIONS" -gt 500 ]; then
+            RISK_SCORE=$((RISK_SCORE + 15))
+          fi
+          
+          echo "risk_score=$RISK_SCORE" >> $GITHUB_OUTPUT
+          echo "files_changed=$FILES_CHANGED" >> $GITHUB_OUTPUT
+      
+      - name: Comment PR with Risk Analysis
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const riskScore = '${{ steps.risk-analysis.outputs.risk_score }}';
+            const filesChanged = '${{ steps.risk-analysis.outputs.files_changed }}';
+            
+            let riskLevel = '🟢 LOW';
+            let riskColor = 'success';
+            if (riskScore >= 50) {
+              riskLevel = '🔴 HIGH';
+              riskColor = 'critical';
+            } else if (riskScore >= 30) {
+              riskLevel = '🟡 MEDIUM';
+              riskColor = 'warning';
+            }
+            
+            const comment = `## 🔍 PR Risk Analysis
+            
+            **Risk Level:** ${riskLevel}
+            **Risk Score:** ${riskScore}/100
+            
+            ### Analysis Details
+            - **Files Changed:** ${filesChanged}
+            - **PR Number:** #${{ github.event.pull_request.number }}
+            - **Author:** @${{ github.event.pull_request.user.login }}
+            
+            ### Risk Factors
+            ${riskScore >= 50 ? '⚠️ **High Risk Detected** - This PR has significant changes that may require extra review attention.' : ''}
+            ${riskScore >= 30 && riskScore < 50 ? '⚡ **Medium Risk** - Consider additional testing before merging.' : ''}
+            ${riskScore < 30 ? '✅ **Low Risk** - Changes appear manageable.' : ''}
+            
+            ---
+            *Automated by GitMind OS - GitHub Intelligence Platform*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+      
+      - name: Label PR based on Risk
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const riskScore = parseInt('${{ steps.risk-analysis.outputs.risk_score }}');
+            
+            let label = 'risk-low';
+            if (riskScore >= 50) {
+              label = 'risk-high';
+            } else if (riskScore >= 30) {
+              label = 'risk-medium';
+            }
+            
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: [label]
+            });
+

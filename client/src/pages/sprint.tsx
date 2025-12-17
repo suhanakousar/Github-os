@@ -1,9 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { MetricCard } from "@/components/metric-card";
 import { RiskBadge } from "@/components/risk-badge";
+import { LoadingSkeleton } from "@/components/loading-skeleton";
+import { EmptyState } from "@/components/empty-state";
 import { 
   GitPullRequest, 
   AlertCircle, 
@@ -13,7 +17,8 @@ import {
   CheckCircle,
   XCircle,
   Hourglass,
-  Calendar
+  Calendar,
+  AlertTriangle
 } from "lucide-react";
 import type { SprintAnalysis } from "@shared/schema";
 import {
@@ -25,62 +30,18 @@ import {
   Legend,
 } from "recharts";
 
-const mockSprintData: SprintAnalysis = {
-  id: "1",
-  repositoryId: "repo1",
-  sprintName: "Sprint 24 - Q4 Release",
-  riskLevel: "high",
-  blockerCount: 2,
-  unreviewedPRs: 4,
-  idleIssues: 3,
-  predictedCompletion: 72,
-  insights: [
-    "2 critical PRs blocked pending review for 3+ days",
-    "Core maintainer @johndoe on PTO until Dec 20",
-    "3 issues idle for 6+ days without assignment",
-    "Velocity trending 18% below sprint average",
-  ],
-  recommendations: [
-    "Prioritize PR #1234 and #1245 review immediately",
-    "Redistribute @johndoe's tasks to available reviewers",
-    "Triage idle issues and reassign or move to backlog",
-    "Consider scope reduction for sprint completion",
-  ],
-  createdAt: new Date(),
-};
-
-const issueStatusData = [
-  { name: "Completed", value: 12, color: "hsl(var(--chart-2))" },
-  { name: "In Progress", value: 8, color: "hsl(var(--chart-1))" },
-  { name: "Blocked", value: 2, color: "hsl(var(--chart-5))" },
-  { name: "To Do", value: 5, color: "hsl(var(--chart-4))" },
-];
-
-const prStatusData = [
-  { name: "Merged", value: 15, color: "hsl(var(--chart-2))" },
-  { name: "In Review", value: 6, color: "hsl(var(--chart-3))" },
-  { name: "Changes Requested", value: 3, color: "hsl(var(--chart-4))" },
-  { name: "Draft", value: 2, color: "hsl(var(--muted))" },
-];
-
-const blockers = [
-  { id: 1, type: "PR", number: 1234, title: "Major API refactoring", daysBlocked: 4, reason: "Awaiting core team review" },
-  { id: 2, type: "Issue", number: 567, title: "Database migration blocked", daysBlocked: 6, reason: "Dependency on external team" },
-];
-
-const unreviewedPRs = [
-  { number: 1234, title: "feat: Major API refactoring", author: "johndoe", age: "4 days" },
-  { number: 1267, title: "fix: Critical auth bug", author: "security", age: "2 days" },
-  { number: 1278, title: "chore: Update dependencies", author: "dependabot", age: "1 day" },
-  { number: 1289, title: "feat: New dashboard widgets", author: "frontend_dev", age: "3 hours" },
-];
+// Sprint data will be fetched from API
 
 export default function SprintPage() {
+  const { selectedRepoId } = useRepository();
+  
   const { data: sprintAnalysis, isLoading } = useQuery<SprintAnalysis>({
-    queryKey: ["/api/sprint/current"],
+    queryKey: ["/api/sprint/current", selectedRepoId],
+    queryFn: createRepoQueryFn<SprintAnalysis>("/api/sprint/current", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const sprint = sprintAnalysis || mockSprintData;
+  const sprint = sprintAnalysis;
 
   const getRiskColor = () => {
     switch (sprint.riskLevel) {
@@ -90,6 +51,22 @@ export default function SprintPage() {
       default: return "text-green-500 bg-green-500/10 border-green-500/30";
     }
   };
+
+  if (!sprint && !isLoading) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          icon={Calendar}
+          title="No sprint data"
+          description="Sprint analysis will appear here once a sprint is analyzed."
+        />
+      </div>
+    );
+  }
+
+  if (!sprint) {
+    return <LoadingSkeleton />;
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -167,7 +144,7 @@ export default function SprintPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={issueStatusData}
+                    data={[]}
                     cx="50%"
                     cy="50%"
                     innerRadius={40}
@@ -175,7 +152,7 @@ export default function SprintPage() {
                     paddingAngle={2}
                     dataKey="value"
                   >
-                    {issueStatusData.map((entry, index) => (
+                    {[].map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
@@ -205,7 +182,7 @@ export default function SprintPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={prStatusData}
+                    data={[]}
                     cx="50%"
                     cy="50%"
                     innerRadius={40}
@@ -213,7 +190,7 @@ export default function SprintPage() {
                     paddingAngle={2}
                     dataKey="value"
                   >
-                    {prStatusData.map((entry, index) => (
+                    {[].map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
@@ -241,7 +218,20 @@ export default function SprintPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {blockers.map((blocker) => (
+            {sprint && sprint.blockerCount > 0 ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title={`${sprint.blockerCount} blocker(s) detected`}
+                description="Check the sprint analysis for details on blockers."
+              />
+            ) : (
+              <EmptyState
+                icon={CheckCircle}
+                title="No blockers"
+                description="No blockers detected in the current sprint."
+              />
+            )}
+            {[].map((blocker) => (
               <div 
                 key={blocker.id}
                 className="p-3 rounded-md bg-red-500/5 border border-red-500/20"
@@ -273,7 +263,20 @@ export default function SprintPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {unreviewedPRs.map((pr) => (
+            {sprint && sprint.unreviewedPRs > 0 ? (
+              <EmptyState
+                icon={GitPullRequest}
+                title={`${sprint.unreviewedPRs} PR(s) pending review`}
+                description="Check the sprint analysis for details on unreviewed PRs."
+              />
+            ) : (
+              <EmptyState
+                icon={CheckCircle}
+                title="All PRs reviewed"
+                description="No PRs are pending review."
+              />
+            )}
+            {[].map((pr) => (
               <div 
                 key={pr.number}
                 className="flex items-center justify-between gap-4 p-3 rounded-md bg-orange-500/5 border border-orange-500/20"
@@ -306,12 +309,26 @@ export default function SprintPage() {
           </CardHeader>
           <CardContent>
             <ul className="space-y-2">
-              {(sprint.insights as string[] || []).map((insight, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm">
-                  <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
-                  <span className="text-muted-foreground">{insight}</span>
-                </li>
-              ))}
+              {(() => {
+                const insights = sprint.insights;
+                if (!insights) return null;
+                // Handle both array and object formats
+                const insightArray = Array.isArray(insights) 
+                  ? insights 
+                  : typeof insights === 'object' 
+                    ? Object.values(insights).filter(v => typeof v === 'string')
+                    : [];
+                return insightArray.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">No insights available</li>
+                ) : (
+                  insightArray.map((insight, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
+                      <span className="text-muted-foreground">{String(insight)}</span>
+                    </li>
+                  ))
+                );
+              })()}
             </ul>
           </CardContent>
         </Card>
@@ -325,12 +342,26 @@ export default function SprintPage() {
           </CardHeader>
           <CardContent>
             <ul className="space-y-2">
-              {(sprint.recommendations as string[] || []).map((rec, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm">
-                  <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-                  <span className="text-muted-foreground">{rec}</span>
-                </li>
-              ))}
+              {(() => {
+                const recommendations = sprint.recommendations;
+                if (!recommendations) return null;
+                // Handle both array and object formats
+                const recArray = Array.isArray(recommendations) 
+                  ? recommendations 
+                  : typeof recommendations === 'object' 
+                    ? Object.values(recommendations).filter(v => typeof v === 'string')
+                    : [];
+                return recArray.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">No recommendations available</li>
+                ) : (
+                  recArray.map((rec, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                      <span className="text-muted-foreground">{String(rec)}</span>
+                    </li>
+                  ))
+                );
+              })()}
             </ul>
           </CardContent>
         </Card>

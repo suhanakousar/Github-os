@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -25,59 +27,7 @@ import {
   Cell,
 } from "recharts";
 
-const mockPredictions: Prediction[] = [
-  {
-    id: "1",
-    repositoryId: "repo1",
-    predictionType: "bug_likelihood",
-    targetId: "PR #1234",
-    probability: 0.78,
-    confidence: 0.85,
-    reasoning: "Large changeset (1250+ lines) with modifications to core authentication module. Historical data shows 72% of similar PRs introduced bugs.",
-    isVerified: null,
-    createdAt: new Date(),
-  },
-  {
-    id: "2",
-    repositoryId: "repo1",
-    predictionType: "revert_probability",
-    targetId: "PR #1245",
-    probability: 0.45,
-    confidence: 0.72,
-    reasoning: "Database migration with incomplete test coverage. Similar migrations had 40% revert rate within 48 hours.",
-    isVerified: null,
-    createdAt: new Date(),
-  },
-  {
-    id: "3",
-    repositoryId: "repo1",
-    predictionType: "deadline_miss",
-    targetId: "Sprint 24",
-    probability: 0.62,
-    confidence: 0.68,
-    reasoning: "Current velocity 18% below target. 2 blockers unresolved for 4+ days. Historical patterns suggest 65% chance of scope reduction needed.",
-    isVerified: null,
-    createdAt: new Date(),
-  },
-  {
-    id: "4",
-    repositoryId: "repo1",
-    predictionType: "bug_likelihood",
-    targetId: "PR #1267",
-    probability: 0.15,
-    confidence: 0.92,
-    reasoning: "Small, focused change with comprehensive test coverage. Author has strong track record in this module.",
-    isVerified: null,
-    createdAt: new Date(),
-  },
-];
-
-const predictionAccuracyData = [
-  { type: "Bug Detection", accuracy: 82, predictions: 45 },
-  { type: "Revert Prediction", accuracy: 76, predictions: 28 },
-  { type: "Deadline Risk", accuracy: 71, predictions: 12 },
-  { type: "Quality Issues", accuracy: 88, predictions: 67 },
-];
+// Prediction data will be fetched from API
 
 const getPredictionIcon = (type: string) => {
   switch (type) {
@@ -95,11 +45,21 @@ const getPredictionColor = (probability: number) => {
 };
 
 export default function PredictionsPage() {
+  const { selectedRepoId } = useRepository();
+  
   const { data: predictions, isLoading } = useQuery<Prediction[]>({
-    queryKey: ["/api/predictions"],
+    queryKey: ["/api/predictions", selectedRepoId],
+    queryFn: createRepoQueryFn<Prediction[]>("/api/predictions", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const displayPredictions = predictions || mockPredictions;
+  const displayPredictions = predictions || [];
+
+  const predictionAccuracyData = displayPredictions.length > 0 ? [
+    { type: "Bug Detection", accuracy: 0, predictions: displayPredictions.filter(p => p.predictionType === "bug_likelihood").length },
+    { type: "Revert Prediction", accuracy: 0, predictions: displayPredictions.filter(p => p.predictionType === "revert_probability").length },
+    { type: "Deadline Risk", accuracy: 0, predictions: displayPredictions.filter(p => p.predictionType === "deadline_miss").length },
+  ] : [];
   
   const highRiskCount = displayPredictions.filter(p => p.probability >= 0.7).length;
   const avgConfidence = Math.round(

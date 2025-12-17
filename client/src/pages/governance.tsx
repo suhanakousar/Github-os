@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,48 +34,7 @@ import {
 import type { GovernanceRule } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
-const mockRules: GovernanceRule[] = [
-  {
-    id: "1",
-    repositoryId: "repo1",
-    ruleName: "Maximum PR Size",
-    ruleType: "pr_size",
-    config: { maxLines: 500, maxFiles: 20 },
-    isEnabled: true,
-    severity: "warning",
-    createdAt: new Date(),
-  },
-  {
-    id: "2",
-    repositoryId: "repo1",
-    ruleName: "Required Test Coverage",
-    ruleType: "test_coverage",
-    config: { minCoverage: 80, enforceDelta: true },
-    isEnabled: true,
-    severity: "blocking",
-    createdAt: new Date(),
-  },
-  {
-    id: "3",
-    repositoryId: "repo1",
-    ruleName: "Minimum Reviewers",
-    ruleType: "required_reviewers",
-    config: { minReviewers: 2, requireCodeOwner: true },
-    isEnabled: true,
-    severity: "blocking",
-    createdAt: new Date(),
-  },
-  {
-    id: "4",
-    repositoryId: "repo1",
-    ruleName: "Commit Message Format",
-    ruleType: "commit_message",
-    config: { pattern: "^(feat|fix|chore|docs|refactor|test):", requireScope: false },
-    isEnabled: false,
-    severity: "info",
-    createdAt: new Date(),
-  },
-];
+// Governance rules will be fetched from API
 
 const ruleTemplates = [
   { type: "pr_size", name: "PR Size Limit", icon: FileCode, description: "Limit maximum lines and files per PR" },
@@ -87,11 +48,15 @@ export default function GovernancePage() {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const { toast } = useToast();
 
+  const { selectedRepoId } = useRepository();
+  
   const { data: rules, isLoading } = useQuery<GovernanceRule[]>({
-    queryKey: ["/api/governance/rules"],
+    queryKey: ["/api/governance/rules", selectedRepoId],
+    queryFn: createRepoQueryFn<GovernanceRule[]>("/api/governance/rules", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const displayRules = rules || mockRules;
+  const displayRules = rules || [];
   const enabledCount = displayRules.filter(r => r.isEnabled).length;
   const blockingCount = displayRules.filter(r => r.severity === "blocking" && r.isEnabled).length;
 

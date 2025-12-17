@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { RepositoryProvider } from "@/contexts/repository-context";
 
 import Dashboard from "@/pages/dashboard";
 import KnowledgeGraphPage from "@/pages/knowledge-graph";
@@ -52,9 +53,10 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider>
-          <SidebarProvider style={style as React.CSSProperties}>
+      <RepositoryProvider>
+        <ThemeProvider>
+          <TooltipProvider>
+            <SidebarProvider style={style as React.CSSProperties}>
             <div className="flex h-screen w-full">
               <AppSidebar />
               <div className="flex flex-col flex-1 overflow-hidden">
@@ -71,6 +73,7 @@ function App() {
           <Toaster />
         </TooltipProvider>
       </ThemeProvider>
+      </RepositoryProvider>
     </QueryClientProvider>
   );
 }

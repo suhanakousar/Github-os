@@ -1,6 +1,8 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import type { Server } from "http";
+import passport from "passport";
 import { storage } from "./storage";
+import { DbStorage } from "./db-storage";
 import OpenAI from "openai";
 import { z } from "zod";
 import { 
@@ -8,9 +10,10 @@ import {
   insertGovernanceRuleSchema 
 } from "@shared/schema";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Initialize OpenAI client only if API key is provided
+const openai = process.env.OPENAI_API_KEY 
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 // Request validation schemas for AI-powered endpoints
 const riskAnalyzeRequestSchema = z.object({
@@ -50,6 +53,86 @@ const simulationRunRequestSchema = z.object({
 });
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
+  // Auth endpoints
+  app.get("/api/auth/github", passport.authenticate("github", { scope: ["user:email", "repo"] }));
+  
+  app.get(
+    "/api/auth/github/callback",
+    passport.authenticate("github", { failureRedirect: "/?error=auth_failed" }),
+    (req: Request, res: Response) => {
+      // Store GitHub token in session
+      const user = req.user as any;
+      const session = req.session as any;
+      if (user && session && user.githubToken) {
+        session.githubToken = user.githubToken;
+      }
+      res.redirect("/");
+    }
+  );
+
+  app.get("/api/auth/me", (req, res) => {
+    if (req.isAuthenticated()) {
+      const user = req.user as any;
+      res.json({
+        id: user.id,
+        username: user.username,
+        authenticated: true,
+        hasGitHubToken: !!(req.session as any)?.githubToken || !!(user as any)?.githubToken,
+      });
+    } else {
+      res.json({ authenticated: false });
+    }
+  });
+
+  app.post("/api/auth/logout", (req: Request, res: Response, next: any) => {
+    req.logout((err) => {
+      if (err) return next(err);
+      req.session?.destroy((err) => {
+        if (err) return next(err);
+        res.json({ success: true });
+      });
+    });
+  });
+
+  // GitHub repositories endpoint (requires auth)
+  app.get("/api/github/repositories", async (req: Request, res: Response) => {
+    try {
+      const session = req.session as any;
+      const githubToken = session?.githubToken || (req.user as any)?.githubToken || process.env.GITHUB_TOKEN;
+      
+      if (!githubToken) {
+        return res.status(401).json({ error: "GitHub authentication required. Please sign in with GitHub." });
+      }
+
+      const { Octokit } = await import("@octokit/rest");
+      const octokit = new Octokit({ auth: githubToken });
+
+      const { data: repos } = await octokit.repos.listForAuthenticatedUser({
+        per_page: 100,
+        sort: "updated",
+      });
+
+      const formattedRepos = repos.map((repo) => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        owner: repo.owner.login,
+        description: repo.description,
+        private: repo.private,
+        defaultBranch: repo.default_branch,
+        updatedAt: repo.updated_at,
+        language: repo.language,
+        stars: repo.stargazers_count,
+        forks: repo.forks_count,
+      }));
+
+      res.json(formattedRepos);
+    } catch (error: any) {
+      console.error("Error fetching GitHub repositories:", error);
+      res.status(500).json({ error: "Failed to fetch repositories" });
+    }
+  });
+
   // Dashboard endpoints
   app.get("/api/dashboard/metrics", async (req, res) => {
     try {
@@ -98,22 +181,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { owner, name } = validation.data;
       const fullName = `${owner}/${name}`;
       
-      let repo = await storage.getRepositoryByFullName(fullName);
-      if (!repo) {
-        repo = await storage.createRepository({
-          owner,
-          name,
-          fullName,
-          description: null,
-          defaultBranch: "main",
-          healthScore: 0,
-        });
+      console.log(`Creating/fetching repository: ${fullName}`);
+      console.log(`Using storage type: ${storage.constructor.name}`);
+      
+      try {
+        let repo = await storage.getRepositoryByFullName(fullName);
+        if (!repo) {
+          console.log(`Repository ${fullName} not found in database, creating...`);
+          repo = await storage.createRepository({
+            owner,
+            name,
+            fullName,
+            description: null,
+            defaultBranch: "main",
+            healthScore: 0,
+          });
+          console.log(`Repository ${fullName} created successfully with ID: ${repo.id}`);
+        } else {
+          console.log(`Repository ${fullName} already exists with ID: ${repo.id}`);
+        }
+        
+        res.json(repo);
+      } catch (createError: any) {
+        console.error("Error in createRepository call:", createError);
+        throw createError; // Re-throw to be caught by outer catch
+      }
+    } catch (error: any) {
+      console.error("Error creating repository:", error);
+      console.error("Error stack:", error?.stack);
+      console.error("Error details:", {
+        message: error?.message,
+        status: error?.status,
+        response: error?.response,
+        code: error?.code,
+        errno: error?.errno,
+        syscall: error?.syscall,
+      });
+      
+      // Return more specific error messages
+      let errorMessage = "Failed to create repository";
+      if (error?.message) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      } else if (error?.toString && error.toString() !== '[object Object]') {
+        errorMessage = error.toString();
       }
       
-      res.json(repo);
-    } catch (error) {
-      console.error("Error creating repository:", error);
-      res.status(500).json({ error: "Failed to create repository" });
+      const statusCode = error?.status === 404 ? 404 : 500;
+      res.status(statusCode).json({ 
+        error: errorMessage,
+        details: error?.response?.data || error?.code || undefined
+      });
     }
   });
 
@@ -146,6 +265,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       
       const { repositoryId, prNumber, prTitle, additions, deletions, files, author } = validation.data;
+      
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
       
       // Use OpenAI to analyze risk
       const prompt = `Analyze the risk of this pull request:
@@ -206,16 +329,62 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/architecture/drifts", async (req, res) => {
     try {
       const repoId = req.query.repositoryId as string || "default";
+      console.log(`Fetching architecture drifts for repository: ${repoId}`);
       const drifts = await storage.getArchitectureDrifts(repoId);
+      console.log(`Found ${drifts.length} architecture drifts for repository ${repoId}`);
       res.json(drifts);
     } catch (error) {
+      console.error("Error fetching architecture drifts:", error);
       res.status(500).json({ error: "Failed to fetch architecture drifts" });
+    }
+  });
+
+  app.post("/api/architecture/populate", async (req, res) => {
+    try {
+      const repoId = req.query.repositoryId as string;
+      if (!repoId) {
+        return res.status(400).json({ error: "repositoryId is required" });
+      }
+
+      const repo = await storage.getRepository(repoId);
+      if (!repo) {
+        return res.status(404).json({ error: "Repository not found" });
+      }
+
+      // Extract owner and name from fullName
+      const [owner, name] = repo.fullName.split('/');
+      if (!owner || !name) {
+        return res.status(400).json({ error: "Invalid repository format" });
+      }
+
+      // Populate architecture drifts asynchronously (force refresh when manually triggered)
+      const storageAny = storage as any;
+      if (storageAny.delegate && typeof storageAny.delegate.populateArchitectureDrifts === 'function') {
+        storageAny.delegate.populateArchitectureDrifts(repoId, owner, name, true).catch((err: any) => {
+          console.error("Error populating architecture drifts:", err);
+        });
+      } else if (typeof storageAny.populateArchitectureDrifts === 'function') {
+        storageAny.populateArchitectureDrifts(repoId, owner, name, true).catch((err: any) => {
+          console.error("Error populating architecture drifts:", err);
+        });
+      } else {
+        console.warn("Cannot populate architecture drifts - method not available");
+      }
+
+      res.json({ message: "Architecture drift detection started" });
+    } catch (error) {
+      console.error("Error triggering architecture drift detection:", error);
+      res.status(500).json({ error: "Failed to trigger detection" });
     }
   });
 
   app.post("/api/architecture/analyze", async (req, res) => {
     try {
       const { repositoryId, files } = req.body;
+      
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
       
       const prompt = `Analyze these files for architectural issues:
         ${JSON.stringify(files?.slice(0, 20) || [])}
@@ -322,6 +491,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       
       const { repositoryId, sprintName, issues, pullRequests } = validation.data;
       
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
+      
       const prompt = `Analyze this sprint data:
         Sprint: ${sprintName}
         Open Issues: ${issues?.length || 0}
@@ -383,6 +556,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       
       const { repositoryId, targetType, targetId, context } = validation.data;
       
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
+      
       const prompt = `Generate a prediction for ${targetType} "${targetId}":
         Context: ${JSON.stringify(context)}
         
@@ -432,6 +609,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       
       const { repositoryId, description, affectedFiles } = validation.data;
+      
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
       
       const prompt = `Generate a step-by-step refactoring plan for:
         ${description}
@@ -508,6 +689,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       
       const { repositoryId, simulationType, parameters } = validation.data;
       
+      if (!openai) {
+        return res.status(503).json({ error: "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable." });
+      }
+      
       const prompt = `Simulate ${simulationType} scenario:
         Parameters: ${JSON.stringify(parameters)}
         
@@ -551,11 +736,123 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/knowledge-graph", async (req, res) => {
     try {
       const repoId = req.query.repositoryId as string || "default";
-      const nodes = await storage.getKnowledgeNodes(repoId);
-      const edges = await storage.getKnowledgeEdges(repoId);
+      console.log(`Fetching knowledge graph for repository: ${repoId}`);
+      
+      const dbNodes = await storage.getKnowledgeNodes(repoId);
+      const dbEdges = await storage.getKnowledgeEdges(repoId);
+      
+      console.log(`Found ${dbNodes.length} nodes and ${dbEdges.length} edges for repository ${repoId}`);
+      
+      // Transform database nodes to frontend format
+      const nodeTypeColors: Record<string, string> = {
+        file: "#3b82f6", // blue
+        commit: "#10b981", // green
+        pr: "#a855f7", // purple
+        contributor: "#f97316", // orange
+        issue: "#ef4444", // red
+      };
+      
+      const nodes = dbNodes.map(node => ({
+        id: node.id,
+        type: node.nodeType,
+        label: node.label,
+        size: 10,
+        color: nodeTypeColors[node.nodeType] || "#6b7280",
+        metadata: node.metadata,
+      }));
+      
+      // Transform database edges to frontend format
+      const edges = dbEdges.map(edge => ({
+        id: edge.id,
+        source: edge.sourceNodeId,
+        target: edge.targetNodeId,
+        type: edge.edgeType,
+        weight: edge.weight || 1,
+      }));
+      
       res.json({ nodes, edges });
     } catch (error) {
+      console.error("Error fetching knowledge graph:", error);
       res.status(500).json({ error: "Failed to fetch knowledge graph" });
+    }
+  });
+
+  app.post("/api/knowledge-graph/populate", async (req, res) => {
+    try {
+      const repoId = req.query.repositoryId as string;
+      if (!repoId) {
+        return res.status(400).json({ error: "repositoryId is required" });
+      }
+
+      const repo = await storage.getRepository(repoId);
+      if (!repo) {
+        return res.status(404).json({ error: "Repository not found" });
+      }
+
+      // Extract owner and name from fullName
+      const [owner, name] = repo.fullName.split('/');
+      if (!owner || !name) {
+        return res.status(400).json({ error: "Invalid repository format" });
+      }
+
+      // Populate knowledge graph asynchronously
+      // Storage is a wrapper, need to access the delegate
+      const storageAny = storage as any;
+      if (storageAny.delegate && typeof storageAny.delegate.populateKnowledgeGraph === 'function') {
+        storageAny.delegate.populateKnowledgeGraph(repoId, owner, name).catch((err: any) => {
+          console.error("Error populating knowledge graph:", err);
+        });
+      } else if (typeof storageAny.populateKnowledgeGraph === 'function') {
+        storageAny.populateKnowledgeGraph(repoId, owner, name).catch((err: any) => {
+          console.error("Error populating knowledge graph:", err);
+        });
+      } else {
+        console.warn("Cannot populate knowledge graph - method not available");
+      }
+
+      res.json({ message: "Knowledge graph population started" });
+    } catch (error) {
+      console.error("Error triggering knowledge graph population:", error);
+      res.status(500).json({ error: "Failed to trigger population" });
+    }
+  });
+
+  app.post("/api/temporal/populate", async (req, res) => {
+    try {
+      const repoId = req.query.repositoryId as string;
+      if (!repoId) {
+        return res.status(400).json({ error: "repositoryId is required" });
+      }
+
+      const repo = await storage.getRepository(repoId);
+      if (!repo) {
+        return res.status(404).json({ error: "Repository not found" });
+      }
+
+      // Extract owner and name from fullName
+      const [owner, name] = repo.fullName.split('/');
+      if (!owner || !name) {
+        return res.status(400).json({ error: "Invalid repository format" });
+      }
+
+      // Populate temporal metrics asynchronously (force refresh when manually triggered)
+      const storageAny = storage as any;
+      if (storageAny.delegate && typeof storageAny.delegate.populateTemporalMetrics === 'function') {
+        storageAny.delegate.populateTemporalMetrics(repoId, owner, name, true).catch((err: any) => {
+          console.error("Error populating temporal metrics:", err);
+        });
+      } else if (typeof storageAny.populateTemporalMetrics === 'function') {
+        storageAny.populateTemporalMetrics(repoId, owner, name, true).catch((err: any) => {
+          console.error("Error populating temporal metrics:", err);
+        });
+      } else {
+        console.warn("Cannot populate temporal metrics - method not available");
+      }
+
+      res.json({ message: "Temporal metrics population started" });
+    } catch (error) {
+      console.error("Error triggering temporal metrics population:", error);
+      res.status(500).json({ error: "Failed to trigger population" });
     }
   });
 
@@ -563,10 +860,167 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/temporal/metrics", async (req, res) => {
     try {
       const repoId = req.query.repositoryId as string || "default";
+      console.log(`Fetching temporal metrics for repository: ${repoId}`);
       const metrics = await storage.getTemporalMetrics(repoId);
-      res.json(metrics);
+      console.log(`Found ${metrics.length} temporal metrics for repository ${repoId}`);
+      
+      if (metrics.length === 0) {
+        return res.json({
+          metrics: [],
+          velocityData: [],
+          churnData: [],
+          reviewTimeData: [],
+          contributorActivityData: [],
+          insights: [],
+          summary: null,
+        });
+      }
+      
+      // Transform to frontend format
+      const velocityData = metrics.map((m, i) => ({
+        week: `W${i + 1}`,
+        velocity: m.velocity || 0,
+        commits: m.commitFrequency || 0,
+        prs: Math.round((m.velocity || 0) * 0.3), // Estimate PRs from velocity
+      }));
+
+      const churnData = metrics.slice(-7).map((m, i) => {
+        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const churn = m.codeChurn || 0;
+        const baseAdditions = 500;
+        const additions = Math.round(baseAdditions * (1 + churn));
+        const deletions = Math.round(baseAdditions * (1 - churn));
+        return {
+          day: days[i % 7],
+          additions: Math.max(0, additions),
+          deletions: Math.max(0, deletions),
+        };
+      });
+
+      const reviewTimeData = metrics.map((m, i) => ({
+        week: `W${i + 1}`,
+        avgTime: m.prReviewTime || 0,
+        p90Time: (m.prReviewTime || 0) * 2.4, // Estimate P90
+      }));
+
+      const contributorActivityData = metrics.map((m, i) => ({
+        week: `W${i + 1}`,
+        active: m.contributorActivity || 0,
+        new: i > 0 ? Math.max(0, (m.contributorActivity || 0) - (metrics[i - 1]?.contributorActivity || 0)) : 0,
+        churned: i > 0 ? Math.max(0, (metrics[i - 1]?.contributorActivity || 0) - (m.contributorActivity || 0)) : 0,
+      }));
+
+      // Generate insights from metrics
+      const insights: Array<{ type: string; message: string; severity: string; trend: number }> = [];
+      if (metrics.length >= 2) {
+        const latest = metrics[metrics.length - 1];
+        const previous = metrics[metrics.length - 2];
+        
+        const velocityTrend = latest.velocity && previous.velocity 
+          ? ((latest.velocity - previous.velocity) / previous.velocity) * 100 
+          : 0;
+        if (Math.abs(velocityTrend) > 5) {
+          insights.push({
+            type: 'velocity',
+            message: `Repository velocity ${velocityTrend > 0 ? 'increased' : 'decreased'} ${Math.abs(Math.round(velocityTrend))}% this week`,
+            severity: velocityTrend > 0 ? 'info' : 'warning',
+            trend: Math.round(velocityTrend),
+          });
+        }
+
+        const reviewTimeTrend = latest.prReviewTime && previous.prReviewTime
+          ? ((latest.prReviewTime - previous.prReviewTime) / previous.prReviewTime) * 100
+          : 0;
+        if (reviewTimeTrend > 50) {
+          insights.push({
+            type: 'delay',
+            message: `PR review time increased ${Math.round(reviewTimeTrend)}% - may need attention`,
+            severity: 'warning',
+            trend: Math.round(reviewTimeTrend),
+          });
+        }
+
+        const activityTrend = latest.contributorActivity && previous.contributorActivity
+          ? ((latest.contributorActivity - previous.contributorActivity) / previous.contributorActivity) * 100
+          : 0;
+        if (activityTrend < -30) {
+          insights.push({
+            type: 'burnout',
+            message: `Contributor activity dropped ${Math.abs(Math.round(activityTrend))}% - potential burnout signal`,
+            severity: 'critical',
+            trend: Math.round(activityTrend),
+          });
+        }
+
+        const churnTrend = latest.codeChurn && previous.codeChurn
+          ? ((latest.codeChurn - previous.codeChurn) / Math.abs(previous.codeChurn || 1)) * 100
+          : 0;
+        if (Math.abs(churnTrend) > 20) {
+          insights.push({
+            type: 'churn',
+            message: `Code churn ratio ${churnTrend > 0 ? 'increased' : 'improved'} ${Math.abs(Math.round(churnTrend))}%`,
+            severity: churnTrend < 0 ? 'info' : 'warning',
+            trend: Math.round(churnTrend),
+          });
+        }
+      }
+
+      res.json({
+        metrics,
+        velocityData,
+        churnData,
+        reviewTimeData,
+        contributorActivityData,
+        insights,
+        summary: metrics.length > 0 ? {
+          weeklyVelocity: metrics[metrics.length - 1]?.velocity || 0,
+          avgReviewTime: metrics.reduce((sum, m) => sum + (m.prReviewTime || 0), 0) / metrics.length,
+          commitFrequency: metrics[metrics.length - 1]?.commitFrequency || 0,
+          activeContributors: metrics[metrics.length - 1]?.contributorActivity || 0,
+        } : null,
+      });
     } catch (error) {
+      console.error("Error fetching temporal metrics:", error);
       res.status(500).json({ error: "Failed to fetch temporal metrics" });
+    }
+  });
+
+  // Mock Data Generation endpoint (for demonstration)
+  app.post("/api/mock-data/generate", async (req, res) => {
+    try {
+      const repoId = req.query.repositoryId as string;
+      if (!repoId) {
+        return res.status(400).json({ error: "repositoryId is required" });
+      }
+
+      console.log(`[API] Mock data generation requested for repository: ${repoId}`);
+
+      const repo = await storage.getRepository(repoId);
+      if (!repo) {
+        console.error(`[API] Repository ${repoId} not found`);
+        return res.status(404).json({ error: "Repository not found" });
+      }
+
+      console.log(`[API] Repository found: ${repo.fullName} (${repo.id})`);
+
+      // Import and generate mock data
+      const { generateMockData } = await import("./mock-data");
+      await generateMockData(storage, repoId);
+
+      console.log(`[API] Mock data generation completed for ${repo.fullName}`);
+
+      res.json({ 
+        message: "Mock data generated successfully",
+        repositoryId: repoId,
+        repositoryName: repo.fullName,
+      });
+    } catch (error: any) {
+      console.error("[API] Error generating mock data:", error);
+      console.error("[API] Error stack:", error?.stack);
+      res.status(500).json({ 
+        error: "Failed to generate mock data",
+        details: error?.message || String(error),
+      });
     }
   });
 }

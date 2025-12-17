@@ -1,12 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/hooks/use-toast";
 import { MetricCard } from "@/components/metric-card";
 import { HealthGauge } from "@/components/health-gauge";
 import { RiskBadge } from "@/components/risk-badge";
 import { InsightCard } from "@/components/insight-card";
 import { LoadingSkeleton } from "@/components/loading-skeleton";
 import { EmptyState } from "@/components/empty-state";
-import { RepositorySelector } from "@/components/repository-selector";
+import { GitHubRepoSelector } from "@/components/github-repo-selector";
+import { Button } from "@/components/ui/button";
 import { 
   AlertTriangle, 
   FileCode, 
@@ -15,7 +18,8 @@ import {
   GitPullRequest, 
   Shield,
   Activity,
-  LayoutDashboard
+  LayoutDashboard,
+  Database
 } from "lucide-react";
 import type { DashboardMetrics, TemporalInsight, RiskAnalysis } from "@shared/schema";
 import {
@@ -28,55 +32,153 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-const mockVelocityData = [
-  { date: "Dec 1", velocity: 45, churn: 12 },
-  { date: "Dec 3", velocity: 52, churn: 8 },
-  { date: "Dec 5", velocity: 48, churn: 15 },
-  { date: "Dec 7", velocity: 61, churn: 10 },
-  { date: "Dec 9", velocity: 55, churn: 18 },
-  { date: "Dec 11", velocity: 67, churn: 7 },
-  { date: "Dec 13", velocity: 72, churn: 9 },
-  { date: "Dec 15", velocity: 68, churn: 11 },
-  { date: "Dec 17", velocity: 75, churn: 6 },
-];
+// Velocity data will be fetched from API
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { selectedRepoId, currentRepoName, setSelectedRepo } = useRepository();
+
   const { data: metrics, isLoading: metricsLoading } = useQuery<DashboardMetrics>({
-    queryKey: ["/api/dashboard/metrics"],
+    queryKey: ["/api/dashboard/metrics", selectedRepoId],
+    queryFn: async () => {
+      const url = selectedRepoId 
+        ? `/api/dashboard/metrics?repositoryId=${selectedRepoId}`
+        : "/api/dashboard/metrics";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch metrics");
+      return res.json();
+    },
+    enabled: !!selectedRepoId, // Only fetch when a repo is selected
   });
 
   const { data: insights, isLoading: insightsLoading } = useQuery<TemporalInsight[]>({
-    queryKey: ["/api/dashboard/insights"],
+    queryKey: ["/api/dashboard/insights", selectedRepoId],
+    queryFn: async () => {
+      const url = selectedRepoId 
+        ? `/api/dashboard/insights?repositoryId=${selectedRepoId}`
+        : "/api/dashboard/insights";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch insights");
+      return res.json();
+    },
+    enabled: !!selectedRepoId,
   });
 
   const { data: highRiskPRs, isLoading: prsLoading } = useQuery<RiskAnalysis[]>({
-    queryKey: ["/api/risk/high"],
+    queryKey: ["/api/risk/high", selectedRepoId],
+    queryFn: async () => {
+      const url = selectedRepoId 
+        ? `/api/risk/high?repositoryId=${selectedRepoId}`
+        : "/api/risk/high";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch high risk PRs");
+      return res.json();
+    },
+    enabled: !!selectedRepoId,
   });
 
-  const isLoading = metricsLoading || insightsLoading || prsLoading;
+  const createRepoMutation = useMutation({
+    mutationFn: async ({ owner, name }: { owner: string; name: string }) => {
+      const response = await fetch("/api/repositories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner, name }),
+      });
+      if (!response.ok) {
+        let errorMessage = "Failed to create repository";
+        try {
+          const errorData = await response.json();
+          console.error("Server error response:", errorData);
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } catch (parseError) {
+          // If response is not JSON, try to get text
+          try {
+            const text = await response.text();
+            console.error("Server error text:", text);
+            errorMessage = text || response.statusText || errorMessage;
+          } catch {
+            errorMessage = response.statusText || errorMessage;
+          }
+        }
+        console.error("Throwing error:", errorMessage);
+        throw new Error(errorMessage);
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setSelectedRepo(data.id, data.fullName);
+      toast({
+        title: "Repository connected",
+        description: `Successfully connected ${data.fullName}`,
+      });
+      // Refetch all queries with the new repository ID
+      queryClient.refetchQueries({ queryKey: ["/api/dashboard/metrics", data.id] });
+      queryClient.refetchQueries({ queryKey: ["/api/dashboard/insights", data.id] });
+      queryClient.refetchQueries({ queryKey: ["/api/risk/high", data.id] });
+      // Invalidate all other queries to refetch with new repo ID
+      queryClient.invalidateQueries();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to connect repository",
+        variant: "destructive",
+      });
+    },
+  });
 
-  const displayMetrics = metrics || {
-    healthScore: 71,
-    healthTrend: 5,
-    highRiskPRs: 2,
-    architectureWarnings: 3,
-    velocityTrend: 12,
-    activeContributors: 8,
-    pendingReviews: 4,
-    governanceViolations: 1,
+  const isLoading = metricsLoading || insightsLoading || prsLoading || createRepoMutation.isPending;
+
+  const displayMetrics = metrics;
+  const displayInsights: TemporalInsight[] = insights || [];
+
+  const handleSelectRepo = async (owner: string, name: string) => {
+    await createRepoMutation.mutateAsync({ owner, name });
   };
 
-  const displayInsights: TemporalInsight[] = insights || [
-    { type: "velocity", message: "Repository velocity increased 12% this week", severity: "info", trend: 12 },
-    { type: "delay", message: "Average PR review time: 2.3 days (↑ from 1.8 days)", severity: "warning", trend: 28 },
-    { type: "burnout", message: "Core contributor activity dropped 38% in 2 weeks", severity: "critical", trend: -38 },
-  ];
+  const generateMockDataMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRepoId) throw new Error("No repository selected");
+      const response = await fetch(`/api/mock-data/generate?repositoryId=${selectedRepoId}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to generate mock data");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Mock data generated",
+        description: "Mock data has been created for all pages. Refreshing data...",
+      });
+      // Invalidate and refetch all queries
+      queryClient.invalidateQueries();
+      // Force refetch all queries after a short delay to ensure data is available
+      setTimeout(() => {
+        queryClient.refetchQueries();
+      }, 500);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to generate mock data",
+        variant: "destructive",
+      });
+    },
+  });
 
-  const handleSelectRepo = (owner: string, name: string) => {
-    console.log("Selected repo:", owner, name);
-  };
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <LoadingSkeleton />
+      </div>
+    );
+  }
 
-  if (!metrics && !isLoading) {
+  if (!metrics) {
     return (
       <div className="p-6">
         <div className="flex items-center justify-between mb-8">
@@ -86,7 +188,11 @@ export default function Dashboard() {
               Connect a repository to start analyzing
             </p>
           </div>
-          <RepositorySelector onSelectRepo={handleSelectRepo} />
+          <GitHubRepoSelector 
+            currentRepo={currentRepoName} 
+            onSelectRepo={handleSelectRepo}
+            isLoading={createRepoMutation.isPending}
+          />
         </div>
         <EmptyState
           icon={LayoutDashboard}
@@ -99,6 +205,11 @@ export default function Dashboard() {
     );
   }
 
+  // At this point, metrics is guaranteed to be defined
+  if (!displayMetrics) {
+    return null;
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -108,7 +219,25 @@ export default function Dashboard() {
             Real-time intelligence overview
           </p>
         </div>
-        <RepositorySelector currentRepo="facebook/react" onSelectRepo={handleSelectRepo} />
+        <div className="flex items-center gap-2">
+          {selectedRepoId && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateMockDataMutation.mutate()}
+              disabled={generateMockDataMutation.isPending}
+              title="Generate mock data for demonstration"
+            >
+              <Database className="w-4 h-4 mr-2" />
+              Generate Mock Data
+            </Button>
+          )}
+          <GitHubRepoSelector 
+            currentRepo={currentRepoName} 
+            onSelectRepo={handleSelectRepo}
+            isLoading={createRepoMutation.isPending}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -168,58 +297,11 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={mockVelocityData}>
-                  <defs>
-                    <linearGradient id="velocityGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="churnGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--chart-5))" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="hsl(var(--chart-5))" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis 
-                    dataKey="date" 
-                    className="text-xs" 
-                    tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={{ stroke: 'hsl(var(--border))' }}
-                  />
-                  <YAxis 
-                    className="text-xs"
-                    tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={{ stroke: 'hsl(var(--border))' }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '6px',
-                    }}
-                    labelStyle={{ color: 'hsl(var(--foreground))' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="velocity"
-                    stroke="hsl(var(--chart-1))"
-                    fill="url(#velocityGradient)"
-                    strokeWidth={2}
-                    name="Velocity"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="churn"
-                    stroke="hsl(var(--chart-5))"
-                    fill="url(#churnGradient)"
-                    strokeWidth={2}
-                    name="Churn"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <EmptyState
+              icon={Activity}
+              title="No velocity data"
+              description="Velocity and churn data will appear here once repository activity is tracked."
+            />
           </CardContent>
         </Card>
 
@@ -228,9 +310,17 @@ export default function Dashboard() {
             <Activity className="w-4 h-4" />
             Temporal Insights
           </h3>
-          {displayInsights.map((insight, i) => (
-            <InsightCard key={i} insight={insight} />
-          ))}
+          {displayInsights.length > 0 ? (
+            displayInsights.map((insight, i) => (
+              <InsightCard key={i} insight={insight} />
+            ))
+          ) : (
+            <EmptyState
+              icon={Activity}
+              title="No insights yet"
+              description="Temporal insights will appear here as repository activity is analyzed."
+            />
+          )}
         </div>
       </div>
 
@@ -246,25 +336,29 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {[
-              { number: 1234, title: "Major API refactoring", risk: 85, author: "johndoe" },
-              { number: 1245, title: "Database migration v3", risk: 78, author: "janedoe" },
-            ].map((pr) => (
-              <div 
-                key={pr.number} 
-                className="flex items-center justify-between gap-4 p-3 rounded-md bg-muted/50"
-                data-testid={`dashboard-pr-${pr.number}`}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">#{pr.number}</span>
-                    <span className="font-medium truncate">{pr.title}</span>
+            {highRiskPRs && highRiskPRs.length > 0 ? (
+              highRiskPRs.slice(0, 5).map((pr) => (
+                <div 
+                  key={pr.id} 
+                  className="flex items-center justify-between gap-4 p-3 rounded-md bg-muted/50"
+                  data-testid={`dashboard-pr-${pr.prNumber}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-muted-foreground">#{pr.prNumber}</span>
+                      <span className="font-medium truncate">{pr.explanation || `PR #${pr.prNumber}`}</span>
+                    </div>
                   </div>
-                  <span className="text-xs text-muted-foreground">by @{pr.author}</span>
+                  <RiskBadge score={pr.overallRisk} size="sm" />
                 </div>
-                <RiskBadge score={pr.risk} size="sm" />
-              </div>
-            ))}
+              ))
+            ) : (
+              <EmptyState
+                icon={GitPullRequest}
+                title="No high risk PRs"
+                description="All pull requests are within acceptable risk levels."
+              />
+            )}
           </CardContent>
         </Card>
 
@@ -281,29 +375,19 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {[
-              { rule: "PR Size Limit", status: "passing", details: "Max 500 lines" },
-              { rule: "Required Reviewers", status: "passing", details: "Min 2 reviewers" },
-              { rule: "Test Coverage", status: "warning", details: "78% (min 80%)" },
-              { rule: "Commit Message", status: "passing", details: "Conventional commits" },
-            ].map((item, i) => (
-              <div 
-                key={i}
-                className="flex items-center justify-between gap-4 p-3 rounded-md bg-muted/50"
-              >
-                <div className="flex-1">
-                  <span className="font-medium">{item.rule}</span>
-                  <p className="text-xs text-muted-foreground">{item.details}</p>
-                </div>
-                <div className={`w-2 h-2 rounded-full ${
-                  item.status === "passing" 
-                    ? "bg-green-500" 
-                    : item.status === "warning" 
-                    ? "bg-yellow-500" 
-                    : "bg-red-500"
-                }`} />
-              </div>
-            ))}
+            {displayMetrics && displayMetrics.governanceViolations > 0 ? (
+              <EmptyState
+                icon={Shield}
+                title="Governance rules active"
+                description={`${displayMetrics.governanceViolations} violation(s) detected. Check the Governance page for details.`}
+              />
+            ) : (
+              <EmptyState
+                icon={Shield}
+                title="No governance violations"
+                description="All governance rules are passing."
+              />
+            )}
           </CardContent>
         </Card>
       </div>

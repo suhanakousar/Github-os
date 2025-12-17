@@ -1,8 +1,14 @@
 import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/empty-state";
+import { LoadingSkeleton } from "@/components/loading-skeleton";
 import { 
   Network, 
   FileCode, 
@@ -17,35 +23,7 @@ import {
 } from "lucide-react";
 import type { KnowledgeGraphData } from "@shared/schema";
 
-const mockGraphData: KnowledgeGraphData = {
-  nodes: [
-    { id: "file-1", type: "file", label: "src/core/auth.ts", size: 30, color: "#3b82f6" },
-    { id: "file-2", type: "file", label: "src/api/users.ts", size: 25, color: "#3b82f6" },
-    { id: "file-3", type: "file", label: "src/db/schema.ts", size: 35, color: "#3b82f6" },
-    { id: "file-4", type: "file", label: "src/utils/helpers.ts", size: 20, color: "#3b82f6" },
-    { id: "commit-1", type: "commit", label: "feat: auth refactor", size: 15, color: "#22c55e" },
-    { id: "commit-2", type: "commit", label: "fix: user validation", size: 12, color: "#22c55e" },
-    { id: "pr-1", type: "pr", label: "PR #1234", size: 20, color: "#a855f7" },
-    { id: "pr-2", type: "pr", label: "PR #1245", size: 18, color: "#a855f7" },
-    { id: "contrib-1", type: "contributor", label: "@johndoe", size: 25, color: "#f97316" },
-    { id: "contrib-2", type: "contributor", label: "@janedoe", size: 22, color: "#f97316" },
-    { id: "issue-1", type: "issue", label: "Issue #456", size: 14, color: "#ef4444" },
-  ],
-  edges: [
-    { source: "commit-1", target: "file-1", type: "modified", weight: 1 },
-    { source: "commit-1", target: "file-3", type: "modified", weight: 1 },
-    { source: "commit-2", target: "file-2", type: "modified", weight: 1 },
-    { source: "pr-1", target: "commit-1", type: "contains", weight: 1 },
-    { source: "pr-2", target: "commit-2", type: "contains", weight: 1 },
-    { source: "contrib-1", target: "file-1", type: "owns", weight: 0.8 },
-    { source: "contrib-1", target: "file-3", type: "owns", weight: 0.6 },
-    { source: "contrib-2", target: "file-2", type: "owns", weight: 0.7 },
-    { source: "issue-1", target: "pr-1", type: "linked", weight: 1 },
-    { source: "file-1", target: "file-4", type: "imports", weight: 1 },
-    { source: "file-2", target: "file-4", type: "imports", weight: 1 },
-    { source: "file-2", target: "file-3", type: "imports", weight: 1 },
-  ],
-};
+// Knowledge graph data will be fetched from API
 
 const nodeTypeConfig = {
   file: { icon: FileCode, color: "bg-blue-500", label: "Files" },
@@ -56,7 +34,95 @@ const nodeTypeConfig = {
 };
 
 export default function KnowledgeGraphPage() {
-  const [selectedNode, setSelectedNode] = useState<typeof mockGraphData.nodes[0] | null>(null);
+  const { selectedRepoId } = useRepository();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  
+  const { data: graphData, isLoading, refetch } = useQuery<KnowledgeGraphData>({
+    queryKey: ["/api/knowledge-graph", selectedRepoId],
+    queryFn: createRepoQueryFn<KnowledgeGraphData>("/api/knowledge-graph", selectedRepoId),
+    enabled: !!selectedRepoId,
+    refetchInterval: 5000, // Refetch every 5 seconds to catch async population
+  });
+
+  const handleRefresh = async () => {
+    if (!selectedRepoId) {
+      toast({
+        title: "No repository selected",
+        description: "Please select a repository first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      toast({
+        title: "Refreshing knowledge graph",
+        description: "Fetching data from GitHub... This may take a moment.",
+      });
+
+      // Trigger knowledge graph population
+      const response = await fetch(`/api/knowledge-graph/populate?repositoryId=${selectedRepoId}`, {
+        method: "POST",
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to trigger population");
+      }
+      
+      // Poll for data - refetch every 5 seconds until we have data
+      let attempts = 0;
+      const maxAttempts = 12; // 12 attempts = ~60 seconds
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        const result = await refetch();
+        const currentNodes = result.data?.nodes || [];
+        
+        // Check if we have data now
+        if (currentNodes.length > 0 || attempts >= maxAttempts) {
+          clearInterval(pollInterval);
+          if (currentNodes.length > 0) {
+            toast({
+              title: "Success",
+              description: `Knowledge graph populated with ${currentNodes.length} nodes`,
+            });
+          } else if (attempts >= maxAttempts) {
+            toast({
+              title: "Still loading",
+              description: "Data is being fetched. Please wait a bit longer and try refreshing again.",
+            });
+          }
+        }
+      }, 5000); // Check every 5 seconds
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to refresh knowledge graph",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const nodes = (graphData && typeof graphData === 'object' && 'nodes' in graphData && Array.isArray(graphData.nodes)) 
+    ? graphData.nodes 
+    : [];
+  const edges = (graphData && typeof graphData === 'object' && 'edges' in graphData && Array.isArray(graphData.edges)) 
+    ? graphData.edges 
+    : [];
+
+  // Debug logging
+  if (selectedRepoId && !isLoading) {
+    console.log("Knowledge Graph Data:", {
+      hasData: !!graphData,
+      nodesCount: nodes.length,
+      edgesCount: edges.length,
+      selectedRepoId,
+    });
+  }
+
+  type NodeType = { id: string; type: string; label: string; size: number; color: string };
+  const [selectedNode, setSelectedNode] = useState<NodeType | null>(null);
   const [activeFilters, setActiveFilters] = useState<string[]>(["file", "commit", "pr", "contributor", "issue"]);
   const [zoom, setZoom] = useState(1);
 
@@ -65,18 +131,17 @@ export default function KnowledgeGraphPage() {
       prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
     );
   };
-
-  const filteredNodes = mockGraphData.nodes.filter(n => activeFilters.includes(n.type));
-  const filteredEdges = mockGraphData.edges.filter(
+  const filteredNodes = nodes.filter(n => activeFilters.includes(n.type));
+  const filteredEdges = edges.filter(
     e => filteredNodes.some(n => n.id === e.source) && filteredNodes.some(n => n.id === e.target)
   );
 
   const nodeStats = {
-    files: mockGraphData.nodes.filter(n => n.type === "file").length,
-    commits: mockGraphData.nodes.filter(n => n.type === "commit").length,
-    prs: mockGraphData.nodes.filter(n => n.type === "pr").length,
-    contributors: mockGraphData.nodes.filter(n => n.type === "contributor").length,
-    issues: mockGraphData.nodes.filter(n => n.type === "issue").length,
+    files: nodes.filter(n => n.type === "file").length,
+    commits: nodes.filter(n => n.type === "commit").length,
+    prs: nodes.filter(n => n.type === "pr").length,
+    contributors: nodes.filter(n => n.type === "contributor").length,
+    issues: nodes.filter(n => n.type === "issue").length,
   };
 
   return (
@@ -90,7 +155,7 @@ export default function KnowledgeGraphPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {Object.entries(nodeTypeConfig).map(([type, config]) => {
-          const count = mockGraphData.nodes.filter(n => n.type === type).length;
+          const count = nodes.filter(n => n.type === type).length;
           const Icon = config.icon;
           const isActive = activeFilters.includes(type);
           
@@ -130,6 +195,15 @@ export default function KnowledgeGraphPage() {
               <div className="flex items-center gap-2">
                 <Button 
                   variant="outline" 
+                  size="sm"
+                  onClick={handleRefresh}
+                  disabled={!selectedRepoId || isLoading}
+                >
+                  <Network className="w-4 h-4 mr-2" />
+                  Refresh
+                </Button>
+                <Button 
+                  variant="outline" 
                   size="icon"
                   onClick={() => setZoom(z => Math.max(0.5, z - 0.1))}
                   data-testid="button-zoom-out"
@@ -152,6 +226,15 @@ export default function KnowledgeGraphPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {filteredNodes.length === 0 ? (
+              <div className="h-96 bg-muted/30 rounded-md border border-border flex items-center justify-center">
+                <EmptyState
+                  icon={Network}
+                  title="No graph data"
+                  description="Click 'Refresh' to fetch data from GitHub, or wait for automatic population to complete."
+                />
+              </div>
+            ) : (
             <div 
               className="h-96 bg-muted/30 rounded-md border border-border relative overflow-hidden"
               style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
@@ -217,6 +300,7 @@ export default function KnowledgeGraphPage() {
                 })}
               </div>
             </div>
+            )}
           </CardContent>
         </Card>
 
@@ -273,12 +357,12 @@ export default function KnowledgeGraphPage() {
                 <div className="pt-2 border-t border-border">
                   <p className="text-xs text-muted-foreground mb-2">Connected To:</p>
                   <div className="space-y-1">
-                    {mockGraphData.edges
+                    {filteredEdges
                       .filter(e => e.source === selectedNode.id || e.target === selectedNode.id)
                       .slice(0, 5)
                       .map((edge, i) => {
                         const connectedId = edge.source === selectedNode.id ? edge.target : edge.source;
-                        const connectedNode = mockGraphData.nodes.find(n => n.id === connectedId);
+                        const connectedNode = nodes.find(n => n.id === connectedId);
                         return (
                           <div key={i} className="flex items-center gap-2 text-xs">
                             <span className="text-muted-foreground">{edge.type}:</span>

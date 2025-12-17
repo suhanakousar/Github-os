@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,55 +22,27 @@ import {
 import type { RefactorPlan } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
-const mockRefactorPlans: RefactorPlan[] = [
-  {
-    id: "1",
-    repositoryId: "repo1",
-    title: "Extract Authentication Module",
-    description: "Refactor the monolithic main.ts file to extract authentication logic into a dedicated module with proper separation of concerns.",
-    steps: [
-      { order: 1, title: "Create auth directory structure", description: "Create src/core/auth/ with index.ts, types.ts, and handlers/", status: "completed" },
-      { order: 2, title: "Extract type definitions", description: "Move all auth-related types to auth/types.ts", status: "completed" },
-      { order: 3, title: "Migrate authentication handlers", description: "Move login, logout, session management to auth/handlers/", status: "in_progress" },
-      { order: 4, title: "Add comprehensive tests", description: "Create unit tests for all extracted auth functions", status: "pending" },
-      { order: 5, title: "Update imports across codebase", description: "Replace old imports with new auth module paths", status: "pending" },
-      { order: 6, title: "Remove deprecated code", description: "Clean up old auth code from main.ts after verification", status: "pending" },
-    ],
-    estimatedEffort: "3-4 hours",
-    riskMitigation: "Each step includes rollback instructions. Run tests after each migration step. Keep old code until full verification.",
-    status: "in_progress",
-    createdAt: new Date(),
-  },
-  {
-    id: "2",
-    repositoryId: "repo1",
-    title: "Resolve Circular Dependencies",
-    description: "Break the circular dependency between users.ts, auth.ts, and validation.ts by introducing a shared types module and using dependency injection.",
-    steps: [
-      { order: 1, title: "Create shared types module", description: "Create src/shared/types.ts with common interfaces", status: "pending" },
-      { order: 2, title: "Extract validation utilities", description: "Move pure validation functions to src/utils/validators.ts", status: "pending" },
-      { order: 3, title: "Implement dependency injection", description: "Add DI container for auth service dependencies", status: "pending" },
-      { order: 4, title: "Update module imports", description: "Replace circular imports with shared types and DI", status: "pending" },
-      { order: 5, title: "Verify with circular dep detector", description: "Run madge to confirm no cycles remain", status: "pending" },
-    ],
-    estimatedEffort: "2-3 hours",
-    riskMitigation: "Create a dependency graph before starting. Test each module in isolation after changes.",
-    status: "proposed",
-    createdAt: new Date(),
-  },
-];
+// Refactor plans will be fetched from API
 
 export default function RefactorPage() {
-  const [selectedPlan, setSelectedPlan] = useState<RefactorPlan | null>(mockRefactorPlans[0]);
+  const [selectedPlan, setSelectedPlan] = useState<RefactorPlan | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
   const { toast } = useToast();
 
+  const { selectedRepoId } = useRepository();
+  
   const { data: plans, isLoading } = useQuery<RefactorPlan[]>({
-    queryKey: ["/api/refactor/plans"],
+    queryKey: ["/api/refactor/plans", selectedRepoId],
+    queryFn: createRepoQueryFn<RefactorPlan[]>("/api/refactor/plans", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const displayPlans = plans || mockRefactorPlans;
+  const displayPlans = plans || [];
+  
+  if (displayPlans.length > 0 && !selectedPlan) {
+    setSelectedPlan(displayPlans[0]);
+  }
 
   const handleGeneratePlan = async () => {
     if (!customPrompt.trim()) {

@@ -4,3 +4,17 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+.env
+.env.local
+.env.*.local
+
+# Unnecessary files
+attached_assets/
+.local/
+*.log
+*.cache
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

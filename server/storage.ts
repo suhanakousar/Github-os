@@ -425,4 +425,191 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Use database storage if DATABASE_URL is set, otherwise use in-memory storage
+// Wrapper class that delegates to the actual storage implementation
+class StorageWrapper implements IStorage {
+  private delegate: IStorage;
+  private initPromise: Promise<void> | null = null;
+
+  constructor() {
+    this.delegate = new MemStorage();
+    
+    // Initialize DbStorage if DATABASE_URL is set
+    if (process.env.DATABASE_URL) {
+      this.initPromise = import("./db-storage")
+        .then(({ DbStorage }) => {
+          try {
+            this.delegate = new DbStorage();
+            console.log("Database storage initialized");
+          } catch (error: any) {
+            console.error("Failed to create DbStorage instance:", error);
+            console.error("Error details:", {
+              message: error?.message,
+              stack: error?.stack,
+              code: error?.code,
+            });
+            throw error; // Re-throw to be caught by outer catch
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to initialize DbStorage, using MemStorage:", error);
+          console.error("Error details:", {
+            message: error?.message,
+            stack: error?.stack,
+            code: error?.code,
+            name: error?.name,
+          });
+          // Keep using MemStorage, but log the error
+        });
+    }
+  }
+
+  // Ensure storage is initialized before delegating
+  private async ensureInitialized() {
+    if (this.initPromise) {
+      await this.initPromise;
+    }
+  }
+
+  // Helper to wrap async methods with initialization check
+  private async callWithInit<T>(fn: () => Promise<T>): Promise<T> {
+    await this.ensureInitialized();
+    return fn();
+  }
+
+  // Delegate all methods to the actual storage instance
+  async getUser(id: string) { 
+    return this.callWithInit(() => this.delegate.getUser(id));
+  }
+  async getUserByUsername(username: string) { 
+    return this.callWithInit(() => this.delegate.getUserByUsername(username));
+  }
+  async createUser(user: InsertUser) { 
+    return this.callWithInit(() => this.delegate.createUser(user));
+  }
+  async getRepository(id: string) { 
+    return this.callWithInit(() => this.delegate.getRepository(id));
+  }
+  async getRepositoryByFullName(fullName: string) { 
+    return this.callWithInit(() => this.delegate.getRepositoryByFullName(fullName));
+  }
+  async createRepository(repo: InsertRepository) { 
+    return this.callWithInit(() => this.delegate.createRepository(repo));
+  }
+  async updateRepository(id: string, data: Partial<InsertRepository>) { 
+    return this.callWithInit(() => this.delegate.updateRepository(id, data));
+  }
+  async listRepositories() { 
+    return this.callWithInit(() => this.delegate.listRepositories());
+  }
+  async getKnowledgeNodes(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getKnowledgeNodes(repositoryId));
+  }
+  async createKnowledgeNode(node: InsertKnowledgeNode) { 
+    return this.callWithInit(() => this.delegate.createKnowledgeNode(node));
+  }
+  async getKnowledgeEdges(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getKnowledgeEdges(repositoryId));
+  }
+  async createKnowledgeEdge(edge: InsertKnowledgeEdge) { 
+    return this.callWithInit(() => this.delegate.createKnowledgeEdge(edge));
+  }
+  async getRiskAnalyses(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getRiskAnalyses(repositoryId));
+  }
+  async getRiskAnalysisByPR(repositoryId: string, prNumber: number) { 
+    return this.callWithInit(() => this.delegate.getRiskAnalysisByPR(repositoryId, prNumber));
+  }
+  async createRiskAnalysis(analysis: InsertRiskAnalysis) { 
+    return this.callWithInit(() => this.delegate.createRiskAnalysis(analysis));
+  }
+  async getHighRiskAnalyses(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getHighRiskAnalyses(repositoryId));
+  }
+  async getContributors(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getContributors(repositoryId));
+  }
+  async getContributorByUsername(repositoryId: string, username: string) { 
+    return this.callWithInit(() => this.delegate.getContributorByUsername(repositoryId, username));
+  }
+  async createContributor(contributor: InsertContributor) { 
+    return this.callWithInit(() => this.delegate.createContributor(contributor));
+  }
+  async updateContributor(id: string, data: Partial<InsertContributor>) { 
+    return this.callWithInit(() => this.delegate.updateContributor(id, data));
+  }
+  async getTemporalMetrics(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getTemporalMetrics(repositoryId));
+  }
+  async createTemporalMetric(metric: InsertTemporalMetric) { 
+    return this.callWithInit(() => this.delegate.createTemporalMetric(metric));
+  }
+  async getArchitectureDrifts(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getArchitectureDrifts(repositoryId));
+  }
+  async createArchitectureDrift(drift: InsertArchitectureDrift) { 
+    return this.callWithInit(() => this.delegate.createArchitectureDrift(drift));
+  }
+  async updateArchitectureDrift(id: string, data: Partial<InsertArchitectureDrift>) { 
+    return this.callWithInit(() => this.delegate.updateArchitectureDrift(id, data));
+  }
+  async getGovernanceRules(repositoryId?: string) { 
+    return this.callWithInit(() => this.delegate.getGovernanceRules(repositoryId));
+  }
+  async getGovernanceRule(id: string) { 
+    return this.callWithInit(() => this.delegate.getGovernanceRule(id));
+  }
+  async createGovernanceRule(rule: InsertGovernanceRule) { 
+    return this.callWithInit(() => this.delegate.createGovernanceRule(rule));
+  }
+  async updateGovernanceRule(id: string, data: Partial<InsertGovernanceRule>) { 
+    return this.callWithInit(() => this.delegate.updateGovernanceRule(id, data));
+  }
+  async deleteGovernanceRule(id: string) { 
+    return this.callWithInit(() => this.delegate.deleteGovernanceRule(id));
+  }
+  async getSprintAnalyses(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getSprintAnalyses(repositoryId));
+  }
+  async getCurrentSprintAnalysis(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getCurrentSprintAnalysis(repositoryId));
+  }
+  async createSprintAnalysis(analysis: InsertSprintAnalysis) { 
+    return this.callWithInit(() => this.delegate.createSprintAnalysis(analysis));
+  }
+  async getPredictions(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getPredictions(repositoryId));
+  }
+  async createPrediction(prediction: InsertPrediction) { 
+    return this.callWithInit(() => this.delegate.createPrediction(prediction));
+  }
+  async updatePrediction(id: string, data: Partial<InsertPrediction>) { 
+    return this.callWithInit(() => this.delegate.updatePrediction(id, data));
+  }
+  async getSimulations(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getSimulations(repositoryId));
+  }
+  async createSimulation(simulation: InsertSimulation) { 
+    return this.callWithInit(() => this.delegate.createSimulation(simulation));
+  }
+  async getRefactorPlans(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getRefactorPlans(repositoryId));
+  }
+  async getRefactorPlan(id: string) { 
+    return this.callWithInit(() => this.delegate.getRefactorPlan(id));
+  }
+  async createRefactorPlan(plan: InsertRefactorPlan) { 
+    return this.callWithInit(() => this.delegate.createRefactorPlan(plan));
+  }
+  async updateRefactorPlan(id: string, data: Partial<InsertRefactorPlan>) { 
+    return this.callWithInit(() => this.delegate.updateRefactorPlan(id, data));
+  }
+  async getDashboardMetrics(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getDashboardMetrics(repositoryId));
+  }
+  async getDashboardInsights(repositoryId: string) { 
+    return this.callWithInit(() => this.delegate.getDashboardInsights(repositoryId));
+  }
+}
+
+export const storage = new StorageWrapper();

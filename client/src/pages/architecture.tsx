@@ -1,12 +1,18 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArchitectureAlert } from "@/components/architecture-alert";
 import { MetricCard } from "@/components/metric-card";
 import { EmptyState } from "@/components/empty-state";
+import { LoadingSkeleton } from "@/components/loading-skeleton";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { RefreshCw } from "lucide-react";
 import { 
   FileCode, 
   GitMerge, 
@@ -28,61 +34,7 @@ import {
   Cell,
 } from "recharts";
 
-const mockDrifts: ArchitectureDrift[] = [
-  {
-    id: "1",
-    repositoryId: "repo1",
-    driftType: "god_file",
-    severity: "critical",
-    affectedFiles: ["src/core/main.ts", "src/core/utils.ts"],
-    description: "src/core/main.ts has grown to 2,847 lines with 45 functions. This file handles authentication, routing, database connections, and business logic.",
-    suggestion: "Split into separate modules: auth.ts, router.ts, db.ts, and services/*.ts",
-    isResolved: false,
-    createdAt: new Date(),
-  },
-  {
-    id: "2",
-    repositoryId: "repo1",
-    driftType: "circular_dependency",
-    severity: "high",
-    affectedFiles: ["src/api/users.ts", "src/services/auth.ts", "src/utils/validation.ts"],
-    description: "Circular dependency detected: users.ts -> auth.ts -> validation.ts -> users.ts",
-    suggestion: "Extract shared types to a common module and use dependency injection",
-    isResolved: false,
-    createdAt: new Date(),
-  },
-  {
-    id: "3",
-    repositoryId: "repo1",
-    driftType: "boundary_blur",
-    severity: "medium",
-    affectedFiles: ["src/components/UserProfile.tsx"],
-    description: "UI component UserProfile.tsx contains direct database queries and business logic",
-    suggestion: "Move data fetching to a custom hook and business logic to a service layer",
-    isResolved: false,
-    createdAt: new Date(),
-  },
-  {
-    id: "4",
-    repositoryId: "repo1",
-    driftType: "structure_degradation",
-    severity: "low",
-    affectedFiles: ["src/helpers/", "src/lib/", "src/utils/"],
-    description: "Multiple utility folders with overlapping responsibilities: helpers/, lib/, utils/",
-    suggestion: "Consolidate into a single utils/ folder with clear submodule organization",
-    isResolved: true,
-    createdAt: new Date(),
-  },
-];
-
-const fileComplexityData = [
-  { file: "main.ts", lines: 2847, complexity: 92 },
-  { file: "auth.ts", lines: 856, complexity: 68 },
-  { file: "api.ts", lines: 1234, complexity: 75 },
-  { file: "db.ts", lines: 678, complexity: 58 },
-  { file: "utils.ts", lines: 445, complexity: 42 },
-  { file: "types.ts", lines: 312, complexity: 25 },
-];
+// Architecture drift data will be fetched from API
 
 const driftTypeConfig = {
   god_file: { icon: FileCode, color: "text-red-500", bgColor: "bg-red-500/10" },
@@ -92,14 +44,97 @@ const driftTypeConfig = {
 };
 
 export default function ArchitecturePage() {
+  const { selectedRepoId } = useRepository();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("all");
   const [selectedDrift, setSelectedDrift] = useState<ArchitectureDrift | null>(null);
 
-  const { data: drifts, isLoading } = useQuery<ArchitectureDrift[]>({
-    queryKey: ["/api/architecture/drifts"],
+  const { data: drifts, isLoading, refetch } = useQuery<ArchitectureDrift[]>({
+    queryKey: ["/api/architecture/drifts", selectedRepoId],
+    queryFn: createRepoQueryFn<ArchitectureDrift[]>("/api/architecture/drifts", selectedRepoId),
+    enabled: !!selectedRepoId,
+    refetchInterval: 5000, // Auto-refetch every 5 seconds
   });
 
-  const displayDrifts = drifts || mockDrifts;
+  const handleRefresh = async () => {
+    if (!selectedRepoId) {
+      toast({
+        title: "No repository selected",
+        description: "Please select a repository first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      toast({
+        title: "Analyzing architecture",
+        description: "Detecting architectural drifts... This may take a moment.",
+      });
+
+      const response = await fetch(`/api/architecture/populate?repositoryId=${selectedRepoId}`, {
+        method: "POST",
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to trigger analysis");
+      }
+      
+      // Poll for data
+      let attempts = 0;
+      const maxAttempts = 12;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        const result = await refetch();
+        const currentData = result.data;
+        
+        if (currentData && currentData.length > 0 || attempts >= maxAttempts) {
+          clearInterval(pollInterval);
+          if (currentData && currentData.length > 0) {
+            toast({
+              title: "Success",
+              description: `Detected ${currentData.length} architecture drift(s)`,
+            });
+          } else if (attempts >= maxAttempts) {
+            toast({
+              title: "Still analyzing",
+              description: "Architecture analysis is in progress. Please wait a bit longer and try refreshing again.",
+            });
+          }
+        }
+      }, 5000);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to analyze architecture",
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (!selectedRepoId) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          icon={FolderTree}
+          title="No repository selected"
+          description="Please select a repository from the dashboard to view architecture drift detection."
+        />
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <LoadingSkeleton />
+      </div>
+    );
+  }
+
+  const displayDrifts = drifts || [];
   
   const filteredDrifts = displayDrifts.filter(drift => {
     if (activeTab === "resolved") return drift.isResolved;
@@ -113,11 +148,21 @@ export default function ArchitecturePage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Architecture Drift Detection</h1>
-        <p className="text-muted-foreground mt-1">
-          Detect and resolve architectural anti-patterns and degradation
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Architecture Drift Detection</h1>
+          <p className="text-muted-foreground mt-1">
+            Detect and resolve architectural anti-patterns and degradation
+          </p>
+        </div>
+        <Button 
+          variant="outline" 
+          onClick={handleRefresh}
+          disabled={!selectedRepoId || isLoading}
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Refresh
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -156,40 +201,11 @@ export default function ArchitecturePage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={fileComplexityData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis 
-                    type="number"
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                  />
-                  <YAxis 
-                    dataKey="file" 
-                    type="category"
-                    width={80}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '6px',
-                    }}
-                  />
-                  <Bar dataKey="complexity" radius={[0, 4, 4, 0]}>
-                    {fileComplexityData.map((entry, index) => (
-                      <Cell 
-                        key={`cell-${index}`} 
-                        fill={entry.complexity > 80 ? 'hsl(var(--chart-5))' : 
-                              entry.complexity > 60 ? 'hsl(var(--chart-4))' : 
-                              'hsl(var(--chart-2))'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <EmptyState
+              icon={FileCode}
+              title="No complexity data"
+              description="File complexity analysis will appear here once the repository is analyzed."
+            />
           </CardContent>
         </Card>
 
@@ -244,11 +260,27 @@ export default function ArchitecturePage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {filteredDrifts.length === 0 ? (
-            <EmptyState
-              icon={CheckCircle}
-              title="No architecture drifts"
-              description="Your codebase is looking healthy with no detected architectural issues."
-            />
+            <div className="space-y-4">
+              <EmptyState
+                icon={CheckCircle}
+                title="No architecture drifts"
+                description={displayDrifts.length === 0 
+                  ? "Click 'Refresh' to analyze the repository for architectural issues."
+                  : "Your codebase is looking healthy with no detected architectural issues."}
+              />
+              {displayDrifts.length === 0 && (
+                <div className="flex justify-center">
+                  <Button 
+                    variant="outline" 
+                    onClick={handleRefresh}
+                    disabled={!selectedRepoId || isLoading}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Analyze Architecture
+                  </Button>
+                </div>
+              )}
+            </div>
           ) : (
             filteredDrifts.map((drift) => (
               <ArchitectureAlert

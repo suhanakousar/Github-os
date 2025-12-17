@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PRRiskRow } from "@/components/pr-risk-row";
@@ -44,82 +46,20 @@ interface PRData {
   createdAt: Date;
 }
 
-const mockPRs: PRData[] = [
-  {
-    id: 1,
-    number: 1234,
-    title: "feat: Major API refactoring for v2 endpoints",
-    author: { username: "johndoe", avatarUrl: "" },
-    overallRisk: 85,
-    codeRisk: 92,
-    processRisk: 78,
-    humanRisk: 65,
-    additions: 1250,
-    deletions: 890,
-    comments: 12,
-    createdAt: new Date("2024-12-15"),
-  },
-  {
-    id: 2,
-    number: 1245,
-    title: "chore: Database migration to v3 schema",
-    author: { username: "janedoe", avatarUrl: "" },
-    overallRisk: 78,
-    codeRisk: 72,
-    processRisk: 85,
-    humanRisk: 70,
-    additions: 450,
-    deletions: 120,
-    comments: 8,
-    createdAt: new Date("2024-12-14"),
-  },
-  {
-    id: 3,
-    number: 1256,
-    title: "fix: Critical security patch for auth module",
-    author: { username: "security_team", avatarUrl: "" },
-    overallRisk: 65,
-    codeRisk: 58,
-    processRisk: 72,
-    humanRisk: 55,
-    additions: 120,
-    deletions: 45,
-    comments: 15,
-    createdAt: new Date("2024-12-16"),
-  },
-  {
-    id: 4,
-    number: 1267,
-    title: "feat: Add new dashboard widgets",
-    author: { username: "frontend_dev", avatarUrl: "" },
-    overallRisk: 35,
-    codeRisk: 28,
-    processRisk: 42,
-    humanRisk: 30,
-    additions: 380,
-    deletions: 50,
-    comments: 5,
-    createdAt: new Date("2024-12-17"),
-  },
-];
-
-const riskDimensionData = [
-  { dimension: "Code", value: 78, fullMark: 100 },
-  { dimension: "Process", value: 65, fullMark: 100 },
-  { dimension: "Human", value: 52, fullMark: 100 },
-  { dimension: "Architecture", value: 71, fullMark: 100 },
-  { dimension: "Release", value: 45, fullMark: 100 },
-];
+// Risk data will be fetched from API
 
 export default function RiskAnalysisPage() {
+  const { selectedRepoId } = useRepository();
   const [selectedPR, setSelectedPR] = useState<PRData | null>(null);
   const [activeTab, setActiveTab] = useState("all");
 
   const { data: riskAnalyses, isLoading } = useQuery<RiskAnalysis[]>({
-    queryKey: ["/api/risk"],
+    queryKey: ["/api/risk", selectedRepoId],
+    queryFn: createRepoQueryFn<RiskAnalysis[]>("/api/risk", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const filteredPRs = mockPRs.filter(pr => {
+  const filteredPRs = (riskAnalyses || []).filter(pr => {
     if (activeTab === "critical") return pr.overallRisk >= 80;
     if (activeTab === "high") return pr.overallRisk >= 60 && pr.overallRisk < 80;
     if (activeTab === "medium") return pr.overallRisk >= 40 && pr.overallRisk < 60;
@@ -127,9 +67,17 @@ export default function RiskAnalysisPage() {
     return true;
   });
 
-  const overallRepoRisk = Math.round(
-    mockPRs.reduce((acc, pr) => acc + pr.overallRisk, 0) / mockPRs.length
-  );
+  const overallRepoRisk = riskAnalyses && riskAnalyses.length > 0
+    ? Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.overallRisk, 0) / riskAnalyses.length)
+    : 0;
+
+  const riskDimensionData = riskAnalyses && riskAnalyses.length > 0 ? [
+    { dimension: "Code", value: Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.codeRisk, 0) / riskAnalyses.length), fullMark: 100 },
+    { dimension: "Process", value: Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.processRisk, 0) / riskAnalyses.length), fullMark: 100 },
+    { dimension: "Human", value: Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.humanRisk, 0) / riskAnalyses.length), fullMark: 100 },
+    { dimension: "Architecture", value: Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.architecturalRisk, 0) / riskAnalyses.length), fullMark: 100 },
+    { dimension: "Release", value: Math.round(riskAnalyses.reduce((acc, pr) => acc + pr.releaseRisk, 0) / riskAnalyses.length), fullMark: 100 },
+  ] : [];
 
   return (
     <div className="p-6 space-y-6">
@@ -165,8 +113,9 @@ export default function RiskAnalysisPage() {
           </CardHeader>
           <CardContent>
             <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={riskDimensionData}>
+              {riskDimensionData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={riskDimensionData}>
                   <PolarGrid stroke="hsl(var(--border))" />
                   <PolarAngleAxis 
                     dataKey="dimension" 
@@ -193,25 +142,30 @@ export default function RiskAnalysisPage() {
                   />
                 </RadarChart>
               </ResponsiveContainer>
+              ) : (
+                <EmptyState
+                  icon={AlertTriangle}
+                  title="No risk data"
+                  description="Risk dimension data will appear here once PRs are analyzed."
+                />
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {[
-          { label: "Code Risk", value: 78, icon: Code, color: "text-blue-500" },
-          { label: "Process Risk", value: 65, icon: GitPullRequest, color: "text-purple-500" },
-          { label: "Human Risk", value: 52, icon: Users, color: "text-green-500" },
-          { label: "Architectural Risk", value: 71, icon: Building, color: "text-orange-500" },
-          { label: "Release Risk", value: 45, icon: Rocket, color: "text-pink-500" },
-        ].map((item) => (
-          <Card key={item.label} className="overflow-visible">
+        {riskDimensionData.length > 0 ? riskDimensionData.map((item) => (
+          <Card key={item.dimension} className="overflow-visible">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <item.icon className={`w-4 h-4 ${item.color}`} />
+                {item.dimension === "Code" && <Code className="w-4 h-4 text-blue-500" />}
+                {item.dimension === "Process" && <GitPullRequest className="w-4 h-4 text-purple-500" />}
+                {item.dimension === "Human" && <Users className="w-4 h-4 text-green-500" />}
+                {item.dimension === "Architecture" && <Building className="w-4 h-4 text-orange-500" />}
+                {item.dimension === "Release" && <Rocket className="w-4 h-4 text-pink-500" />}
                 <span className="text-xs text-muted-foreground uppercase tracking-wide truncate">
-                  {item.label}
+                  {item.dimension} Risk
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -220,7 +174,17 @@ export default function RiskAnalysisPage() {
               </div>
             </CardContent>
           </Card>
-        ))}
+        )) : (
+          <Card className="col-span-5">
+            <CardContent className="p-8">
+              <EmptyState
+                icon={AlertTriangle}
+                title="No risk data"
+                description="Risk analysis data will appear here once pull requests are analyzed."
+              />
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Card className="overflow-visible">
@@ -232,7 +196,7 @@ export default function RiskAnalysisPage() {
             </CardTitle>
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList>
-                <TabsTrigger value="all" data-testid="tab-all">All ({mockPRs.length})</TabsTrigger>
+                <TabsTrigger value="all" data-testid="tab-all">All ({riskAnalyses?.length || 0})</TabsTrigger>
                 <TabsTrigger value="critical" data-testid="tab-critical">Critical</TabsTrigger>
                 <TabsTrigger value="high" data-testid="tab-high">High</TabsTrigger>
                 <TabsTrigger value="medium" data-testid="tab-medium">Medium</TabsTrigger>
@@ -252,7 +216,20 @@ export default function RiskAnalysisPage() {
             filteredPRs.map((pr) => (
               <PRRiskRow
                 key={pr.id}
-                pr={pr}
+                pr={{
+                  id: parseInt(pr.id) || 0,
+                  number: pr.prNumber || 0,
+                  title: pr.explanation || `PR #${pr.prNumber}`,
+                  author: { username: "unknown", avatarUrl: "" },
+                  overallRisk: pr.overallRisk,
+                  codeRisk: pr.codeRisk,
+                  processRisk: pr.processRisk,
+                  humanRisk: pr.humanRisk,
+                  additions: 0,
+                  deletions: 0,
+                  comments: 0,
+                  createdAt: pr.createdAt || new Date(),
+                }}
                 onViewDetails={setSelectedPR}
               />
             ))
@@ -260,7 +237,7 @@ export default function RiskAnalysisPage() {
         </CardContent>
       </Card>
 
-      {selectedPR && (
+      {selectedPR && riskAnalyses && (
         <Card className="overflow-visible border-2 border-primary/20">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
@@ -281,8 +258,7 @@ export default function RiskAnalysisPage() {
                   Code Risk: {selectedPR.codeRisk}
                 </h4>
                 <p className="text-xs text-muted-foreground">
-                  Large changeset with {selectedPR.additions + selectedPR.deletions} lines modified. 
-                  High complexity detected in modified files.
+                  {riskAnalyses.find(r => r.prNumber === selectedPR.number)?.explanation || "Risk analysis details"}
                 </p>
               </div>
               <div className="p-4 rounded-md bg-muted/50">
@@ -291,8 +267,7 @@ export default function RiskAnalysisPage() {
                   Process Risk: {selectedPR.processRisk}
                 </h4>
                 <p className="text-xs text-muted-foreground">
-                  Only {selectedPR.comments} review comments. Missing required reviewers 
-                  from core team. No linked issues.
+                  Process risk assessment based on review patterns and workflow.
                 </p>
               </div>
               <div className="p-4 rounded-md bg-muted/50">
@@ -301,8 +276,7 @@ export default function RiskAnalysisPage() {
                   Human Risk: {selectedPR.humanRisk}
                 </h4>
                 <p className="text-xs text-muted-foreground">
-                  Author @{selectedPR.author.username} has moderate experience with this codebase. 
-                  Recent commit history shows stable patterns.
+                  Human risk based on contributor experience and activity patterns.
                 </p>
               </div>
             </div>

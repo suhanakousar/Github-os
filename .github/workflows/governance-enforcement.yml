@@ -1,0 +1,142 @@
+name: Governance Enforcement
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  enforce-governance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Check PR Size
+        id: pr-size-check
+        run: |
+          ADDITIONS=$(git diff --shortstat ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | awk '{print $4}' || echo "0")
+          DELETIONS=$(git diff --shortstat ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | awk '{print $6}' || echo "0")
+          TOTAL_CHANGES=$((ADDITIONS + DELETIONS))
+          
+          echo "additions=$ADDITIONS" >> $GITHUB_OUTPUT
+          echo "deletions=$DELETIONS" >> $GITHUB_OUTPUT
+          echo "total_changes=$TOTAL_CHANGES" >> $GITHUB_OUTPUT
+          
+          # Governance rule: Max 1000 lines changed
+          MAX_LINES=1000
+          if [ "$TOTAL_CHANGES" -gt "$MAX_LINES" ]; then
+            echo "size_violation=true" >> $GITHUB_OUTPUT
+            echo "violation_reason=PR exceeds maximum size limit of $MAX_LINES lines" >> $GITHUB_OUTPUT
+          else
+            echo "size_violation=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check Commit Messages
+        id: commit-check
+        run: |
+          COMMITS=$(git log --format="%s" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          VIOLATIONS=0
+          VIOLATION_MESSAGES=""
+          
+          while IFS= read -r commit; do
+            # Check if commit message follows conventional commits format
+            if ! echo "$commit" | grep -qE "^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .+"; then
+              VIOLATIONS=$((VIOLATIONS + 1))
+              VIOLATION_MESSAGES="${VIOLATION_MESSAGES}\n- Invalid: $commit"
+            fi
+          done <<< "$COMMITS"
+          
+          echo "violations=$VIOLATIONS" >> $GITHUB_OUTPUT
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "commit_violation=true" >> $GITHUB_OUTPUT
+            echo "violation_details<<EOF" >> $GITHUB_OUTPUT
+            echo "$VIOLATION_MESSAGES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "commit_violation=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check Required Reviewers
+        id: reviewers-check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const reviewers = pr.requested_reviewers || [];
+            const teamReviewers = pr.requested_teams || [];
+            
+            const totalReviewers = reviewers.length + teamReviewers.length;
+            const MIN_REVIEWERS = 1; // Governance rule: at least 1 reviewer
+            
+            core.setOutput('has_reviewers', totalReviewers >= MIN_REVIEWERS ? 'true' : 'false');
+            core.setOutput('reviewer_count', totalReviewers.toString());
+      
+      - name: Report Governance Status
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const sizeViolation = '${{ steps.pr-size-check.outputs.size_violation }}' === 'true';
+            const commitViolation = '${{ steps.commit-check.outputs.commit_violation }}' === 'true';
+            const hasReviewers = '${{ steps.reviewers-check.outputs.has_reviewers }}' === 'true';
+            
+            const violations = [];
+            if (sizeViolation) {
+              violations.push('❌ **PR Size:** Exceeds maximum limit');
+            }
+            if (commitViolation) {
+              violations.push('❌ **Commit Messages:** Not following conventional commits format');
+            }
+            if (!hasReviewers) {
+              violations.push('❌ **Reviewers:** No reviewers assigned');
+            }
+            
+            let status = '✅ **All governance rules passed!**';
+            let statusColor = 'success';
+            
+            if (violations.length > 0) {
+              status = '⚠️ **Governance violations detected**';
+              statusColor = 'failure';
+            }
+            
+            const comment = `## 🛡️ Governance Check Results
+            
+            ${status}
+            
+            ### Rule Compliance
+            
+            ${sizeViolation ? '❌' : '✅'} **PR Size:** ${{ steps.pr-size-check.outputs.total_changes }} lines changed
+            ${commitViolation ? '❌' : '✅'} **Commit Messages:** Following conventional commits
+            ${hasReviewers ? '✅' : '❌'} **Reviewers:** ${{ steps.reviewers-check.outputs.reviewer_count }} reviewer(s) assigned
+            
+            ${violations.length > 0 ? `### Violations\n${violations.join('\n')}\n\n*Please address these issues before merging.*` : ''}
+            
+            ---
+            *Automated by GitMind OS - Governance Engine*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+            
+            // Set check status
+            if (violations.length > 0) {
+              core.setFailed('Governance violations detected');
+            }
+

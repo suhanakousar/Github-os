@@ -26,27 +26,32 @@ export function RepositorySelector({ currentRepo, onSelectRepo, isLoading }: Rep
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\s]+)/);
-    if (!match) {
-      const simpleMatch = repoUrl.match(/^([^\/]+)\/([^\/\s]+)$/);
-      if (simpleMatch) {
-        onSelectRepo(simpleMatch[1], simpleMatch[2].replace('.git', ''));
-        setOpen(false);
-        setRepoUrl("");
-        return;
-      }
-      
-      toast({
-        title: "Invalid repository",
-        description: "Please enter a valid GitHub repository URL or owner/name format",
-        variant: "destructive",
-      });
+    // Trim whitespace
+    const trimmedUrl = repoUrl.trim();
+    
+    // Try full GitHub URL first
+    const match = trimmedUrl.match(/github\.com\/([^\/]+)\/([^\/\s]+)/);
+    if (match) {
+      onSelectRepo(match[1], match[2].replace('.git', ''));
+      setOpen(false);
+      setRepoUrl("");
       return;
     }
-
-    onSelectRepo(match[1], match[2].replace('.git', ''));
-    setOpen(false);
-    setRepoUrl("");
+    
+    // Try owner/name format (with or without spaces)
+    const simpleMatch = trimmedUrl.match(/^([^\s\/]+)[\/\s]+([^\s\/]+)$/);
+    if (simpleMatch) {
+      onSelectRepo(simpleMatch[1].trim(), simpleMatch[2].trim().replace('.git', ''));
+      setOpen(false);
+      setRepoUrl("");
+      return;
+    }
+    
+    toast({
+      title: "Invalid repository",
+      description: "Please enter a valid GitHub repository URL or owner/name format (e.g., 'owner name' or 'owner/name')",
+      variant: "destructive",
+    });
   };
 
   return (

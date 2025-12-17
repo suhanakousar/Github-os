@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,75 +20,43 @@ import {
 } from "lucide-react";
 import type { SimulationResult } from "@shared/schema";
 
-const mockPRs = [
-  { number: 1234, title: "Major API refactoring" },
-  { number: 1245, title: "Database migration v3" },
-  { number: 1267, title: "New dashboard widgets" },
-  { number: 1278, title: "Security patches" },
-];
-
-const mockContributors = [
-  { username: "johndoe", role: "Core Maintainer" },
-  { username: "janedoe", role: "Frontend Lead" },
-  { username: "senior_eng", role: "Principal Engineer" },
-  { username: "newdev", role: "Junior Developer" },
-];
-
-const mockPRMergeResult: SimulationResult = {
-  scenario: "What if PR #1234 merges today?",
-  currentRisk: 45,
-  projectedRisk: 68,
-  riskDelta: 23,
-  impactAreas: [
-    "Authentication Module",
-    "API Endpoints",
-    "Database Connections",
-    "Test Coverage (-12%)",
-  ],
-  recommendations: [
-    "Add unit tests for new auth handlers before merge",
-    "Request review from @senior_eng for database changes",
-    "Deploy to staging first and monitor for 24h",
-    "Prepare rollback scripts for quick revert if needed",
-  ],
-};
-
-const mockDepartureResult: SimulationResult = {
-  scenario: "What if @senior_eng leaves the team?",
-  currentRisk: 45,
-  projectedRisk: 82,
-  riskDelta: 37,
-  impactAreas: [
-    "Core Module Ownership (91%)",
-    "Database Layer (82%)",
-    "API Design Decisions",
-    "Code Review Capacity (-40%)",
-  ],
-  recommendations: [
-    "Document all architectural decisions in ADRs",
-    "Cross-train @johndoe on database layer",
-    "Pair program critical features with junior devs",
-    "Create runbooks for common maintenance tasks",
-  ],
-};
+// Simulation data will be fetched from API
 
 export default function SimulationPage() {
+  const { selectedRepoId } = useRepository();
   const [simulationType, setSimulationType] = useState<"pr_merge" | "contributor_departure">("pr_merge");
   const [selectedPR, setSelectedPR] = useState<string>("");
   const [selectedContributor, setSelectedContributor] = useState<string>("");
   const [isSimulating, setIsSimulating] = useState(false);
   const [result, setResult] = useState<SimulationResult | null>(null);
 
-  const handleRunSimulation = () => {
+  const { data: simulations } = useQuery({
+    queryKey: ["/api/simulations", selectedRepoId],
+    queryFn: createRepoQueryFn("/api/simulations", selectedRepoId),
+    enabled: !!selectedRepoId,
+  });
+
+  const handleRunSimulation = async () => {
     setIsSimulating(true);
-    setTimeout(() => {
+    try {
+      const response = await fetch("/api/simulations/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repositoryId: selectedRepoId || "default",
+          simulationType,
+          parameters: simulationType === "pr_merge" 
+            ? { prNumber: selectedPR }
+            : { contributorUsername: selectedContributor },
+        }),
+      });
+      const data = await response.json();
+      setResult(data);
+    } catch (error) {
+      console.error("Error running simulation:", error);
+    } finally {
       setIsSimulating(false);
-      if (simulationType === "pr_merge") {
-        setResult(mockPRMergeResult);
-      } else {
-        setResult(mockDepartureResult);
-      }
-    }, 1500);
+    }
   };
 
   const handleReset = () => {
@@ -170,7 +141,7 @@ export default function SimulationPage() {
                     <SelectValue placeholder="Choose a PR..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {mockPRs.map((pr) => (
+                    {[].map((pr) => (
                       <SelectItem key={pr.number} value={pr.number.toString()}>
                         #{pr.number} - {pr.title}
                       </SelectItem>
@@ -186,7 +157,7 @@ export default function SimulationPage() {
                     <SelectValue placeholder="Choose a contributor..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {mockContributors.map((c) => (
+                    {[].map((c) => (
                       <SelectItem key={c.username} value={c.username}>
                         @{c.username} ({c.role})
                       </SelectItem>

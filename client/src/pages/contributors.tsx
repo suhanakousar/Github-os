@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRepository } from "@/contexts/repository-context";
+import { createRepoQueryFn } from "@/lib/api-helpers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ContributorCard } from "@/components/contributor-card";
 import { MetricCard } from "@/components/metric-card";
 import { EmptyState } from "@/components/empty-state";
+import { LoadingSkeleton } from "@/components/loading-skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { 
@@ -14,7 +17,8 @@ import {
   AlertTriangle, 
   Star, 
   Shield,
-  TrendingUp
+  TrendingUp,
+  FileCode
 } from "lucide-react";
 import type { Contributor } from "@shared/schema";
 import {
@@ -26,95 +30,39 @@ import {
   Legend,
 } from "recharts";
 
-const mockContributors: Contributor[] = [
-  {
-    id: "1",
-    repositoryId: "repo1",
-    username: "johndoe",
-    avatarUrl: "",
-    qualityScore: 92,
-    reviewReliability: 88,
-    riskProfile: "low",
-    totalCommits: 342,
-    totalPRs: 78,
-    totalReviews: 156,
-    isSinglePointOfFailure: true,
-    codeOwnership: { "src/core": 0.65, "src/api": 0.45 },
-    lastActiveAt: new Date(),
-    createdAt: new Date(),
-  },
-  {
-    id: "2",
-    repositoryId: "repo1",
-    username: "janedoe",
-    avatarUrl: "",
-    qualityScore: 85,
-    reviewReliability: 92,
-    riskProfile: "low",
-    totalCommits: 256,
-    totalPRs: 62,
-    totalReviews: 198,
-    isSinglePointOfFailure: false,
-    codeOwnership: { "src/ui": 0.72, "src/components": 0.58 },
-    lastActiveAt: new Date(),
-    createdAt: new Date(),
-  },
-  {
-    id: "3",
-    repositoryId: "repo1",
-    username: "newdev",
-    avatarUrl: "",
-    qualityScore: 68,
-    reviewReliability: 72,
-    riskProfile: "high",
-    totalCommits: 45,
-    totalPRs: 12,
-    totalReviews: 8,
-    isSinglePointOfFailure: false,
-    codeOwnership: { "src/utils": 0.15 },
-    lastActiveAt: new Date(),
-    createdAt: new Date(),
-  },
-  {
-    id: "4",
-    repositoryId: "repo1",
-    username: "senior_eng",
-    avatarUrl: "",
-    qualityScore: 95,
-    reviewReliability: 96,
-    riskProfile: "low",
-    totalCommits: 521,
-    totalPRs: 112,
-    totalReviews: 342,
-    isSinglePointOfFailure: true,
-    codeOwnership: { "src/core": 0.82, "src/api": 0.68, "src/db": 0.91 },
-    lastActiveAt: new Date(),
-    createdAt: new Date(),
-  },
-];
-
-const riskDistribution = [
-  { name: "Low Risk", value: 6, color: "hsl(var(--chart-2))" },
-  { name: "Normal Risk", value: 2, color: "hsl(var(--chart-4))" },
-  { name: "High Risk", value: 1, color: "hsl(var(--chart-5))" },
-];
-
-const codeOwnershipData = [
-  { area: "src/core", owner: "senior_eng", percentage: 82 },
-  { area: "src/ui", owner: "janedoe", percentage: 72 },
-  { area: "src/api", owner: "johndoe", percentage: 65 },
-  { area: "src/db", owner: "senior_eng", percentage: 91 },
-  { area: "src/components", owner: "janedoe", percentage: 58 },
-];
+// Contributor data will be fetched from API
 
 export default function ContributorsPage() {
   const [searchQuery, setSearchQuery] = useState("");
+  const { selectedRepoId } = useRepository();
 
   const { data: contributors, isLoading } = useQuery<Contributor[]>({
-    queryKey: ["/api/contributors"],
+    queryKey: ["/api/contributors", selectedRepoId],
+    queryFn: createRepoQueryFn<Contributor[]>("/api/contributors", selectedRepoId),
+    enabled: !!selectedRepoId,
   });
 
-  const displayContributors = contributors || mockContributors;
+  if (!selectedRepoId) {
+    return (
+      <div className="p-6">
+        <EmptyState
+          icon={Users}
+          title="No repository selected"
+          description="Please select a repository from the dashboard to view contributors."
+        />
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <LoadingSkeleton />
+      </div>
+    );
+  }
+
+  const displayContributors = contributors || [];
   const filteredContributors = displayContributors.filter(c =>
     c.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -124,6 +72,12 @@ export default function ContributorsPage() {
   const avgQuality = displayContributors.length > 0 
     ? Math.round(displayContributors.reduce((acc, c) => acc + (c.qualityScore || 0), 0) / displayContributors.length)
     : 0;
+
+  const riskDistribution = displayContributors.length > 0 ? [
+    { name: "Low Risk", value: displayContributors.filter(c => c.riskProfile === "low").length, color: "hsl(var(--chart-2))" },
+    { name: "Normal Risk", value: displayContributors.filter(c => c.riskProfile === "normal").length, color: "hsl(var(--chart-4))" },
+    { name: "High Risk", value: displayContributors.filter(c => c.riskProfile === "high").length, color: "hsl(var(--chart-5))" },
+  ] : [];
 
   return (
     <div className="p-6 space-y-6">
@@ -167,33 +121,41 @@ export default function ContributorsPage() {
             <CardTitle className="text-sm font-medium">Risk Distribution</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={riskDistribution}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {riskDistribution.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '6px',
-                    }}
-                  />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            {riskDistribution.length > 0 ? (
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={riskDistribution}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={40}
+                      outerRadius={70}
+                      paddingAngle={2}
+                      dataKey="value"
+                    >
+                      {riskDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'hsl(var(--card))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '6px',
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <EmptyState
+                icon={Users}
+                title="No risk distribution data"
+                description="Risk distribution will appear here once contributors are analyzed."
+              />
+            )}
           </CardContent>
         </Card>
 
@@ -202,25 +164,44 @@ export default function ContributorsPage() {
             <CardTitle className="text-sm font-medium">Code Ownership Distribution</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {codeOwnershipData.map((item) => (
-              <div key={item.area} className="flex items-center gap-4">
-                <code className="text-xs bg-muted px-2 py-1 rounded font-mono w-32 truncate">
-                  {item.area}
-                </code>
-                <div className="flex-1">
-                  <Progress value={item.percentage} className="h-2" />
-                </div>
-                <div className="flex items-center gap-2 w-32">
-                  <Avatar className="w-5 h-5">
-                    <AvatarFallback className="text-[8px]">
-                      {item.owner.slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="text-xs text-muted-foreground">@{item.owner}</span>
-                </div>
-                <span className="text-xs font-mono w-12 text-right">{item.percentage}%</span>
-              </div>
-            ))}
+            {displayContributors.length > 0 && displayContributors.some(c => c.codeOwnership) ? (
+              displayContributors
+                .filter(c => c.codeOwnership && typeof c.codeOwnership === 'object')
+                .flatMap(c => {
+                  const ownership = c.codeOwnership as Record<string, number>;
+                  return Object.entries(ownership).map(([area, percentage]) => ({
+                    area,
+                    owner: c.username,
+                    percentage: Math.round(percentage * 100),
+                  }));
+                })
+                .slice(0, 5)
+                .map((item) => (
+                  <div key={item.area} className="flex items-center gap-4">
+                    <code className="text-xs bg-muted px-2 py-1 rounded font-mono w-32 truncate">
+                      {item.area}
+                    </code>
+                    <div className="flex-1">
+                      <Progress value={item.percentage} className="h-2" />
+                    </div>
+                    <div className="flex items-center gap-2 w-32">
+                      <Avatar className="w-5 h-5">
+                        <AvatarFallback className="text-[8px]">
+                          {item.owner.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-xs text-muted-foreground">@{item.owner}</span>
+                    </div>
+                    <span className="text-xs font-mono w-12 text-right">{item.percentage}%</span>
+                  </div>
+                ))
+            ) : (
+              <EmptyState
+                icon={FileCode}
+                title="No code ownership data"
+                description="Code ownership data will appear here once contributors are analyzed."
+              />
+            )}
           </CardContent>
         </Card>
       </div>
