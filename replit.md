@@ -93,7 +93,22 @@ Server runs on port 5000, serving both frontend and API.
 
 ## Recent Changes
 - December 2024: Initial implementation of GitMind OS v1.0
-  - Complete frontend with 13 pages and 15+ components
-  - Backend with full API endpoints
+  - Complete frontend with 13 pages and 17+ reusable components
+  - Backend with full API endpoints and Zod validation
   - OpenAI integration for intelligent analysis
-  - Carbon Design System styling with dark mode
+  - Carbon Design System styling with dark/light mode support
+  
+- December 17, 2024: Integration & Polish
+  - Added Zod validation to all POST endpoints for request body validation
+  - Fixed NaN calculation bug in contributors page (avgQuality)
+  - Comprehensive data-testid attributes across all interactive elements
+  - Improved error handling with proper 400 responses for invalid requests
+  - Full TanStack Query integration with proper loading states
+
+## Testing Attributes
+All interactive elements have data-testid attributes for testing:
+- Navigation: `nav-item-*`, `button-sidebar-toggle`
+- Forms: `input-*`, `button-*`, `select-*`
+- Cards: `*-card-*`, `plan-card-*`, `rule-card-*`
+- Tabs: `tab-*`, `settings-tab-*`
+- Metrics: `metric-*`
